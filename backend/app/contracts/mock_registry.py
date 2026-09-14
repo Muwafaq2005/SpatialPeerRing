@@ -344,9 +344,9 @@ class MockAgentRegistry:
     def __init__(self):
         """Initialize registry with all mock implementations."""
         self.agents: Dict[str, BaseAgent] = {
-            "mock-bob-tutor": MockBobAgent(),
-            "mock-alice-arithmetic": MockAliceAgent(),
-            "mock-charlie-conceptual": MockCharlieAgent(),
+            "bob-tutor": MockBobAgent(),
+            "alice-arithmetic": MockAliceAgent(),
+            "charlie-conceptual": MockCharlieAgent(),
         }
 
         self.judges: Dict[str, BaseJudge] = {
