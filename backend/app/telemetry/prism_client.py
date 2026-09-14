@@ -53,6 +53,14 @@ class PeerRingPRISMClient:
         Ambient session context manager.
         Groups all turns and traces emitted inside this context under session_id.
         """
+        if session_id not in self._local_buffers:
+            self._local_buffers[session_id] = {
+                "session_id": session_id,
+                "start_time": datetime.utcnow().isoformat(),
+                "turns": [],
+                "metrics": {}
+            }
+
         if self.enabled and self._client:
             try:
                 with prismtrace.session(session_id) as s_id:
@@ -61,14 +69,6 @@ class PeerRingPRISMClient:
             except Exception as e:
                 logger.warning(f"PRISM ambient_session error (isolated): {e}")
 
-        # Local fallback tracking when disabled or unconfigured
-        if session_id not in self._local_buffers:
-            self._local_buffers[session_id] = {
-                "session_id": session_id,
-                "start_time": datetime.utcnow().isoformat(),
-                "turns": [],
-                "metrics": {}
-            }
         yield session_id
 
     def trace_agent_turn_async(
