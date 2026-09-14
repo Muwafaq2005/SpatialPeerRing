@@ -12,8 +12,9 @@ import uuid
 from datetime import datetime
 
 from app.config import settings
-from app.state.redis_mutex import redis_mutex, TurnLockTimeoutError, RedisConnectionError
 from app.state.pydantic_state import PeerRingState, DialogueMessage, MessageRole
+from app.state.redis_mutex import redis_mutex, TurnLockTimeoutError, RedisConnectionError
+from app.telemetry.prism_client import prism_client
 from app.contracts.mock_registry import MockAgentRegistry
 from app.governance import LeakJudge, HelpJudge, PolicyRewriter, AdversarialClassifier
 
@@ -279,167 +280,195 @@ async def handle_user_message(session_id: str, connection_id: str, message: dict
 
         # Step 4: Process through agent pipeline (using mock for now)
         try:
-            # Send processing notification
-            await connection_manager.send_personal_message(
-                {
-                    "type": "PROCESSING",
-                    "message": "Processing your message...",
-                    "timestamp": datetime.utcnow().isoformat()
-                },
-                session_id
-            )
-
-            # Run through mock agent pipeline
-            turn_result = await connection_manager.mock_registry.run_mock_turn(
-                state, user_content
-            )
-
-            # GOVERNANCE: Apply leak judge evaluation on agent response
-            governance_results = {}
-
-            # Real leak judge evaluation
-            if settings.LEAK_JUDGE_ENABLED:
-                try:
-                    leak_verdict = await connection_manager.leak_judge.evaluate(
-                        text=turn_result["response"].content,
-                        patch=turn_result["response"].blackboard_patch,
-                        state=state
-                    )
-                    governance_results["leak"] = leak_verdict
-
-                    # Log governance decision
-                    logger.info(
-                        f"🛡️ Leak judge: session={session_id}, "
-                        f"verdict={'PASS' if leak_verdict.verdict else 'FAIL'}, "
-                        f"confidence={leak_verdict.confidence:.2f}, "
-                        f"time={leak_verdict.evaluation_time_ms}ms"
-                    )
-
-                except Exception as e:
-                    logger.error(f"Leak judge error for session {session_id}: {e}")
-                    # Use mock leak judge as fallback
-                    governance_results["leak"] = turn_result["governance"]["leak"]
-            else:
-                # Use mock governance when disabled
-                governance_results["leak"] = turn_result["governance"]["leak"]
-
-            # Help judge evaluation
-            if settings.HELP_JUDGE_ENABLED:
-                try:
-                    help_verdict = await connection_manager.help_judge.evaluate(
-                        text=turn_result["response"].content,
-                        patch=turn_result["response"].blackboard_patch,
-                        state=state
-                    )
-                    governance_results["help"] = help_verdict
-
-                    logger.info(
-                        f"🤝 Help judge: session={session_id}, "
-                        f"verdict={'PASS' if help_verdict.verdict else 'FAIL'}, "
-                        f"confidence={help_verdict.confidence:.2f}, "
-                        f"time={help_verdict.evaluation_time_ms}ms"
-                    )
-                except Exception as e:
-                    logger.error(f"Help judge error for session {session_id}: {e}")
-                    governance_results["help"] = turn_result["governance"]["help"]
-            else:
-                governance_results["help"] = turn_result["governance"]["help"]
-
-            # Check if response passes all governance
-            all_pass = all(verdict.verdict for verdict in governance_results.values())
-
-            # POLICY REWRITER: Attempt automated Socratic rewrite on failure
-            if not all_pass and settings.POLICY_REWRITER_ENABLED:
-                logger.info(f"🔄 PolicyRewriter triggered for session {session_id}")
-                rewritten_response, new_governance, rewrite_passed = await connection_manager.policy_rewriter.rewrite_turn(
-                    candidate_response=turn_result["response"],
-                    governance_results=governance_results,
-                    state=state,
-                    leak_judge=connection_manager.leak_judge,
-                    help_judge=connection_manager.help_judge
-                )
-                if rewrite_passed:
-                    turn_result["response"] = rewritten_response
-                    governance_results = new_governance
-                    all_pass = True
-                    logger.info(f"✅ PolicyRewriter produced compliant response for session {session_id}")
-
-            # If governance still fails after rewriting, send rejection notice
-            if not all_pass:
-                failed_judges = [
-                    judge_type for judge_type, verdict in governance_results.items()
-                    if not verdict.verdict
-                ]
-
-                await connection_manager.send_personal_message(
-                    {
-                        "type": "GOVERNANCE_REJECTION",
-                        "message": "Response rejected by governance system",
-                        "failed_judges": failed_judges,
-                        "governance_results": {
-                            judge_type: {
-                                "verdict": verdict.verdict,
-                                "confidence": verdict.confidence,
-                                "reasoning": verdict.reasoning,
-                                "suggested_fixes": verdict.suggested_fixes
-                            }
-                            for judge_type, verdict in governance_results.items()
+            with prism_client.ambient_session(session_id):
+              with prism_client.ambient_session(session_id):
+                    # Send processing notification
+                    await connection_manager.send_personal_message(
+                        {
+                            "type": "PROCESSING",
+                            "message": "Processing your message...",
+                            "timestamp": datetime.utcnow().isoformat()
                         },
-                        "timestamp": datetime.utcnow().isoformat()
-                    },
-                    session_id
-                )
+                        session_id
+                    )
 
-                logger.warning(
-                    f"🚫 Governance rejection: session={session_id}, "
-                    f"failed_judges={failed_judges}"
-                )
+                    # Run through mock agent pipeline
+                    turn_result = await connection_manager.mock_registry.run_mock_turn(
+                        state, user_content
+                    )
 
-                # Don't save state or add response to history for failed governance
-                return
+                    # GOVERNANCE: Apply leak judge evaluation on agent response
+                    governance_results = {}
 
-            # Step 5: Save updated state to Redis (only if governance passes)
-            await redis_mutex.save_state(state)
+                    # Real leak judge evaluation
+                    if settings.LEAK_JUDGE_ENABLED:
+                    try:
+                        with prism_client.ambient_session(session_id):
+                            leak_verdict = await connection_manager.leak_judge.evaluate(
+                                text=turn_result["response"].content,
+                                patch=turn_result["response"].blackboard_patch,
+                                state=state
+                            )
+                            governance_results["leak"] = leak_verdict
 
-            # Step 6: Stream response back to client
-            processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+                            # Log governance decision
+                            logger.info(
+                                f"🛡️ Leak judge: session={session_id}, "
+                                f"verdict={'PASS' if leak_verdict.verdict else 'FAIL'}, "
+                                f"confidence={leak_verdict.confidence:.2f}, "
+                                f"time={leak_verdict.evaluation_time_ms}ms"
+                            )
 
-            response = {
-                "type": "AGENT_RESPONSE",
-                "session_id": session_id,
-                "agent_id": turn_result["winner"],
-                "content": turn_result["response"].content,
-                "think_block": turn_result["response"].think_block,
-                "blackboard_patch": turn_result["response"].blackboard_patch,
-                "governance": {
-                    judge_type: {
-                        "verdict": verdict.verdict,
-                        "confidence": verdict.confidence,
-                        "reasoning": verdict.reasoning,
-                        "evaluation_time_ms": verdict.evaluation_time_ms
+                    except Exception as e:
+                        logger.error(f"Leak judge error for session {session_id}: {e}")
+                        # Use mock leak judge as fallback
+                        governance_results["leak"] = turn_result["governance"]["leak"]
+                else:
+                    # Use mock governance when disabled
+                    governance_results["leak"] = turn_result["governance"]["leak"]
+
+                # Help judge evaluation
+                if settings.HELP_JUDGE_ENABLED:
+                    try:
+                        help_verdict = await connection_manager.help_judge.evaluate(
+                            text=turn_result["response"].content,
+                            patch=turn_result["response"].blackboard_patch,
+                            state=state
+                        )
+                        governance_results["help"] = help_verdict
+
+                        logger.info(
+                            f"🤝 Help judge: session={session_id}, "
+                            f"verdict={'PASS' if help_verdict.verdict else 'FAIL'}, "
+                            f"confidence={help_verdict.confidence:.2f}, "
+                            f"time={help_verdict.evaluation_time_ms}ms"
+                        )
+                    except Exception as e:
+                        logger.error(f"Help judge error for session {session_id}: {e}")
+                        governance_results["help"] = turn_result["governance"]["help"]
+                else:
+                    governance_results["help"] = turn_result["governance"]["help"]
+
+                # Check if response passes all governance
+                all_pass = all(verdict.verdict for verdict in governance_results.values())
+
+                # POLICY REWRITER: Attempt automated Socratic rewrite on failure
+                if not all_pass and settings.POLICY_REWRITER_ENABLED:
+                    logger.info(f"🔄 PolicyRewriter triggered for session {session_id}")
+                    rewritten_response, new_governance, rewrite_passed = await connection_manager.policy_rewriter.rewrite_turn(
+                        candidate_response=turn_result["response"],
+                        governance_results=governance_results,
+                        state=state,
+                        leak_judge=connection_manager.leak_judge,
+                        help_judge=connection_manager.help_judge
+                    )
+                    if rewrite_passed:
+                        turn_result["response"] = rewritten_response
+                        governance_results = new_governance
+                        all_pass = True
+                        logger.info(f"✅ PolicyRewriter produced compliant response for session {session_id}")
+
+                # If governance still fails after rewriting, send rejection notice
+                if not all_pass:
+                    failed_judges = [
+                        judge_type for judge_type, verdict in governance_results.items()
+                        if not verdict.verdict
+                    ]
+
+                    await connection_manager.send_personal_message(
+                        {
+                            "type": "GOVERNANCE_REJECTION",
+                            "message": "Response rejected by governance system",
+                            "failed_judges": failed_judges,
+                            "governance_results": {
+                                judge_type: {
+                                    "verdict": verdict.verdict,
+                                    "confidence": verdict.confidence,
+                                    "reasoning": verdict.reasoning,
+                                    "suggested_fixes": verdict.suggested_fixes
+                                }
+                                for judge_type, verdict in governance_results.items()
+                            },
+                            "timestamp": datetime.utcnow().isoformat()
+                        },
+                        session_id
+                    )
+
+                    logger.warning(
+                        f"🚫 Governance rejection: session={session_id}, "
+                        f"failed_judges={failed_judges}"
+                    )
+
+                    # Don't save state or add response to history for failed governance
+                    return
+
+            
+                # Record manual PRISM traces for agent turn
+                prism_client.trace_agent_turn_async(
+                    session_id=session_id,
+                    agent_id=turn_result["response"].agent_id,
+                    user_input=user_content,
+                    response_text=turn_result["response"].content,
+                    latency_ms=turn_result["response"].generation_time_ms or 150,
+                    metadata={
+                        "has_blackboard_patch": turn_result["response"].blackboard_patch is not None,
+                        "confidence": turn_result["response"].confidence,
+                        "struggle_score": state.policy.struggle_score,
+                        "assistance_level": state.policy.assistance_level.current_level,
                     }
-                    for judge_type, verdict in governance_results.items()
-                },
-                "metadata": {
-                    "candidates": turn_result["candidates"],
-                    "passed_governance": all_pass,
-                    "processing_time_ms": round(processing_time, 2),
-                    "turn_count": state.turn_count,
-                    "mock_response": turn_result["mock_turn"],
-                    "rewritten": turn_result["response"].metadata.get("rewritten", False),
-                    "governance_system": "leak_and_help_judges_with_rewriter"
-                },
-                "timestamp": datetime.utcnow().isoformat()
-            }
+                )
 
-            await connection_manager.send_personal_message(response, session_id)
+                # Record manual PRISM traces for governance judges
+                for jtype, verdict in governance_results.items():
+                    prism_client.trace_judge_eval_async(
+                        session_id=session_id,
+                        judge_type=jtype,
+                        evaluated_text=turn_result["response"].content,
+                        verdict=verdict,
+                        latency_ms=verdict.evaluation_time_ms or 50
+                    )
+    # Step 5: Save updated state to Redis (only if governance passes)
+                await redis_mutex.save_state(state)
 
-            logger.info(
-                f"✅ Turn completed: session={session_id}, "
-                f"winner={turn_result['winner']}, "
-                f"processing_time={processing_time:.1f}ms, "
-                f"governance={'PASS' if all_pass else 'FAIL'}"
-            )
+                # Step 6: Stream response back to client
+                processing_time = (datetime.utcnow() - start_time).total_seconds() * 1000
+
+                response = {
+                    "type": "AGENT_RESPONSE",
+                    "session_id": session_id,
+                    "agent_id": turn_result["winner"],
+                    "content": turn_result["response"].content,
+                    "think_block": turn_result["response"].think_block,
+                    "blackboard_patch": turn_result["response"].blackboard_patch,
+                    "governance": {
+                        judge_type: {
+                            "verdict": verdict.verdict,
+                            "confidence": verdict.confidence,
+                            "reasoning": verdict.reasoning,
+                            "evaluation_time_ms": verdict.evaluation_time_ms
+                        }
+                        for judge_type, verdict in governance_results.items()
+                    },
+                    "metadata": {
+                        "candidates": turn_result["candidates"],
+                        "passed_governance": all_pass,
+                        "processing_time_ms": round(processing_time, 2),
+                        "turn_count": state.turn_count,
+                        "mock_response": turn_result["mock_turn"],
+                        "rewritten": turn_result["response"].metadata.get("rewritten", False),
+                        "governance_system": "leak_and_help_judges_with_rewriter"
+                    },
+                    "timestamp": datetime.utcnow().isoformat()
+                }
+
+                await connection_manager.send_personal_message(response, session_id)
+
+                logger.info(
+                    f"✅ Turn completed: session={session_id}, "
+                    f"winner={turn_result['winner']}, "
+                    f"processing_time={processing_time:.1f}ms, "
+                    f"governance={'PASS' if all_pass else 'FAIL'}"
+                )
 
         except Exception as e:
             logger.error(f"Agent pipeline error for session {session_id}: {e}")

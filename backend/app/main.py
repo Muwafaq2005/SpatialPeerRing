@@ -14,6 +14,7 @@ from app.config import settings
 from app.api.ws_router import router as ws_router
 from app.api.health_routes import router as health_router
 from app.state.redis_mutex import redis_mutex, RedisConnectionError
+from app.api.eval_routes import router as eval_router
 
 # Configure logging
 logging.basicConfig(
@@ -100,7 +101,7 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI application with Redis integration."""
     app = FastAPI(
         title="PeerRing Backend API",
-        description="Spatial AI Tutoring Platform - Foundation + Redis Layer",
+        description="Spatial AI Tutoring Platform - Integrated Foundation & PRISM Gateway",
         version="0.1.0",
         lifespan=lifespan,
         docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
@@ -119,6 +120,7 @@ def create_app() -> FastAPI:
     # Include routers
     app.include_router(health_router, prefix="/api/v1", tags=["health"])
     app.include_router(ws_router, prefix="/api/v1", tags=["websocket"])
+    app.include_router(eval_router, prefix="/api/v1", tags=["evaluation"])
 
     return app
 

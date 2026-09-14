@@ -306,7 +306,7 @@ class TestFoundationIntegration:
         registry = MockAgentRegistry()
 
         # Verify all required agents available
-        required_agents = ["mock-bob-tutor", "mock-alice-arithmetic", "mock-charlie-conceptual"]
+        required_agents = ["bob-tutor", "alice-arithmetic", "charlie-conceptual"]
         available_agents = registry.list_agents()
         for required in required_agents:
             assert required in available_agents, f"Required agent {required} not available"
