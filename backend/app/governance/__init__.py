@@ -4,6 +4,7 @@ from app.governance.leak_judge import LeakJudge, MathExpressionAnalyzer, CrossTu
 from app.governance.math_ast import MathASTValidator, math_ast_validator
 from app.governance.help_judge import HelpJudge
 from app.governance.policy_rewriter import PolicyRewriter
+from app.governance.adversarial_classifier import AdversarialClassifier, AdversarialClassificationResult
 
 __all__ = [
     "LeakJudge",
@@ -13,4 +14,6 @@ __all__ = [
     "math_ast_validator",
     "HelpJudge",
     "PolicyRewriter",
+    "AdversarialClassifier",
+    "AdversarialClassificationResult",
 ]

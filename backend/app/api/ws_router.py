@@ -15,7 +15,7 @@ from app.config import settings
 from app.state.redis_mutex import redis_mutex, TurnLockTimeoutError, RedisConnectionError
 from app.state.pydantic_state import PeerRingState, DialogueMessage, MessageRole
 from app.contracts.mock_registry import MockAgentRegistry
-from app.governance import LeakJudge, HelpJudge, PolicyRewriter
+from app.governance import LeakJudge, HelpJudge, PolicyRewriter, AdversarialClassifier
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +42,10 @@ class WebSocketConnectionManager:
         self.leak_judge = LeakJudge()
         self.help_judge = HelpJudge()
         self.policy_rewriter = PolicyRewriter(max_retries=settings.POLICY_REWRITER_MAX_RETRIES)
+        self.adversarial_classifier = AdversarialClassifier()
 
-        logger.info("🛡️ WebSocket manager initialized with leak judge, help judge, and policy rewriter")
+        logger.info("🛡️ WebSocket manager initialized with leak judge, help judge, policy rewriter, and adversarial classifier")
+
 
     async def connect(self, websocket: WebSocket, session_id: str) -> str:
         """
@@ -268,6 +270,12 @@ async def handle_user_message(session_id: str, connection_id: str, message: dict
             metadata=message.get("metadata", {})
         )
         state.add_message(user_msg)
+
+        # GOVERNANCE: Pre-routing adversarial check
+        adv_result = connection_manager.adversarial_classifier.evaluate(user_content)
+        if adv_result.is_adversarial:
+            logger.warning(f"⚠️ Adversarial intent detected ({adv_result.intent.value}) for session {session_id}. Enabling strict mode.")
+            state.policy.strict_mode = True
 
         # Step 4: Process through agent pipeline (using mock for now)
         try:
