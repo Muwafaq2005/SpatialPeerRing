@@ -136,24 +136,24 @@ class BaseAgent(ABC):
         Returns:
             Utility score between 0.0 and 1.0
         """
-        # Default implementation based on recent message patterns
-        recent_messages = state.get_recent_messages(3)
+        # Base utility by agent type and current policy state
+        if self.agent_type == AgentType.BOB_TUTOR:
+            # Tutor more valuable when student is struggling
+            base_utility = 0.6 + (state.policy.struggle_score * 0.3)
+        elif self.agent_type in [AgentType.ALICE_ARITHMETIC, AgentType.CHARLIE_CONCEPTUAL]:
+            # Peers more valuable when student is confident but making mistakes
+            base_utility = 0.4 + ((1.0 - state.policy.struggle_score) * 0.4)
+        else:
+            base_utility = 0.5
 
         # Check if this agent type spoke recently (lower utility)
+        recent_messages = state.get_recent_messages(3)
         if recent_messages:
             recent_speakers = [msg.agent_id for msg in recent_messages if msg.agent_id]
             if self.agent_id in recent_speakers:
                 return 0.2
 
-        # Base utility by agent type and current policy state
-        if self.agent_type == AgentType.BOB_TUTOR:
-            # Tutor more valuable when student is struggling
-            return 0.6 + (state.policy.struggle_score * 0.3)
-        elif self.agent_type in [AgentType.ALICE_ARITHMETIC, AgentType.CHARLIE_CONCEPTUAL]:
-            # Peers more valuable when student is confident but making mistakes
-            return 0.4 + ((1.0 - state.policy.struggle_score) * 0.4)
-
-        return 0.5
+        return min(max(base_utility, 0.0), 1.0)
 
     def __str__(self) -> str:
         """String representation of the agent."""

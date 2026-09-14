@@ -228,7 +228,7 @@ class TestMockImplementations:
         candidate = await bob.propose_candidate_action(state)
 
         assert candidate is not None
-        assert candidate.agent_id == "mock-bob-tutor"
+        assert candidate.agent_id == "bob-tutor"
         assert candidate.action_type == "question"
         assert 0.0 <= candidate.pedagogical_utility <= 1.0
         assert "socratic_questioning" in candidate.metadata.get("strategy", "")
@@ -236,7 +236,7 @@ class TestMockImplementations:
         # Test response generation
         response = await bob.generate_response(state, candidate)
 
-        assert response.agent_id == "mock-bob-tutor"
+        assert response.agent_id == "bob-tutor"
         assert len(response.content) > 0
         assert response.think_block is not None
         assert "<think>" in response.think_block
@@ -252,8 +252,8 @@ class TestMockImplementations:
         candidate = await alice.propose_candidate_action(state)
         response = await alice.generate_response(state, candidate)
 
-        assert candidate.agent_id == "mock-alice-arithmetic"
-        assert response.agent_id == "mock-alice-arithmetic"
+        assert candidate.agent_id == "alice-arithmetic"
+        assert response.agent_id == "alice-arithmetic"
         assert response.metadata.get("contains_arithmetic_error") is True
 
         # Alice sometimes provides blackboard patches
@@ -270,8 +270,8 @@ class TestMockImplementations:
         candidate = await charlie.propose_candidate_action(state)
         response = await charlie.generate_response(state, candidate)
 
-        assert candidate.agent_id == "mock-charlie-conceptual"
-        assert response.agent_id == "mock-charlie-conceptual"
+        assert candidate.agent_id == "charlie-conceptual"
+        assert response.agent_id == "charlie-conceptual"
         assert response.metadata.get("contains_conceptual_error") is True
 
     @pytest.mark.asyncio
