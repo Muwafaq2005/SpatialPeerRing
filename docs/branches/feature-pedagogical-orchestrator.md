@@ -63,10 +63,9 @@ $$\text{FinalScore} = (\text{RawUtility} \times \text{StruggleWeight}) \times (1
 | **Low Struggle ($< 0.35$)** | **$0.90\times$** | **$1.25\times$** | Student confident; peer mistakes stimulate error-spotting and metacognitive defense. |
 
 ### Anti-Monopolization & Cooldowns
-- **Previous Speaker**: $-0.35$ penalty.
-- **2 Consecutive Turns**: $-0.65$ penalty.
-- **3 Consecutive Turns**: $-0.95$ penalty (forced handoff to another agent).
-- **Time-decay**: Continuous linear decay over 20 seconds.
+- **Previous Speaker**: $-0.45$ penalty.
+- **2 Consecutive Turns**: $-1.00$ penalty ($\text{Score} = 0.0$, strictly preventing 3 consecutive turns by any agent).
+- **Time-decay**: Continuous linear decay over 20 seconds for agents who have not spoken in the last 2 turns.
 
 ---
 
