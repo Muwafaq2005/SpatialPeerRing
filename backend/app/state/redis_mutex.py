@@ -4,6 +4,8 @@ Provides SETNX-based turn locking for WebSocket coordination
 """
 
 import redis.asyncio as redis
+from redis.retry import Retry
+from redis.backoff import ExponentialBackoff
 import json
 import asyncio
 from typing import Optional, Dict, Any
@@ -67,7 +69,7 @@ class RedisTurnMutex:
                 connection_pool=self.connection_pool,
                 decode_responses=True,
                 retry_on_error=[redis.BusyLoadingError, redis.ConnectionError],
-                retry=redis.Retry(retries=3, backoff_policy="exponential_backoff")
+                retry=Retry(ExponentialBackoff(), 3)
             )
 
             # Test connection
