@@ -79,11 +79,14 @@ class BobAgent(BaseAgent):
 
         # Factor 4: Cooldown penalty if Bob spoke very recently
         cooldown_penalty = 0.0
-        if state.messages:
-            last_turn = state.messages[-1]
-            if last_turn.agent_id == self.agent_id:
+        recent_agents = [
+            m.agent_id for m in reversed(state.messages)
+            if m.role == MessageRole.AGENT and m.agent_id
+        ]
+        if recent_agents:
+            if recent_agents[0] == self.agent_id:
                 cooldown_penalty = 0.35
-            elif len(state.messages) >= 2 and state.messages[-2].agent_id == self.agent_id:
+            elif len(recent_agents) >= 2 and recent_agents[1] == self.agent_id:
                 cooldown_penalty = 0.15
 
         # Check explicit cooldown from policy state
