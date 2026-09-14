@@ -15,7 +15,7 @@ from app.config import settings
 from app.state.redis_mutex import redis_mutex, TurnLockTimeoutError, RedisConnectionError
 from app.state.pydantic_state import PeerRingState, DialogueMessage, MessageRole
 from app.contracts.mock_registry import MockAgentRegistry
-from app.governance.leak_judge import LeakJudge
+from app.governance import LeakJudge, HelpJudge, PolicyRewriter
 
 logger = logging.getLogger(__name__)
 
@@ -38,10 +38,12 @@ class WebSocketConnectionManager:
         self.connection_owners: Dict[str, str] = {}  # session_id -> connection_id
         self.mock_registry = MockAgentRegistry()
 
-        # Initialize governance judges
+        # Initialize governance judges and rewriter
         self.leak_judge = LeakJudge()
+        self.help_judge = HelpJudge()
+        self.policy_rewriter = PolicyRewriter(max_retries=settings.POLICY_REWRITER_MAX_RETRIES)
 
-        logger.info("🛡️ WebSocket manager initialized with leak judge governance")
+        logger.info("🛡️ WebSocket manager initialized with leak judge, help judge, and policy rewriter")
 
     async def connect(self, websocket: WebSocket, session_id: str) -> str:
         """
@@ -313,13 +315,48 @@ async def handle_user_message(session_id: str, connection_id: str, message: dict
                 # Use mock governance when disabled
                 governance_results["leak"] = turn_result["governance"]["leak"]
 
-            # Use mock help judge for now (Task #8 will replace this)
-            governance_results["help"] = turn_result["governance"]["help"]
+            # Help judge evaluation
+            if settings.HELP_JUDGE_ENABLED:
+                try:
+                    help_verdict = await connection_manager.help_judge.evaluate(
+                        text=turn_result["response"].content,
+                        patch=turn_result["response"].blackboard_patch,
+                        state=state
+                    )
+                    governance_results["help"] = help_verdict
+
+                    logger.info(
+                        f"🤝 Help judge: session={session_id}, "
+                        f"verdict={'PASS' if help_verdict.verdict else 'FAIL'}, "
+                        f"confidence={help_verdict.confidence:.2f}, "
+                        f"time={help_verdict.evaluation_time_ms}ms"
+                    )
+                except Exception as e:
+                    logger.error(f"Help judge error for session {session_id}: {e}")
+                    governance_results["help"] = turn_result["governance"]["help"]
+            else:
+                governance_results["help"] = turn_result["governance"]["help"]
 
             # Check if response passes all governance
             all_pass = all(verdict.verdict for verdict in governance_results.values())
 
-            # If governance fails, send rejection notice
+            # POLICY REWRITER: Attempt automated Socratic rewrite on failure
+            if not all_pass and settings.POLICY_REWRITER_ENABLED:
+                logger.info(f"🔄 PolicyRewriter triggered for session {session_id}")
+                rewritten_response, new_governance, rewrite_passed = await connection_manager.policy_rewriter.rewrite_turn(
+                    candidate_response=turn_result["response"],
+                    governance_results=governance_results,
+                    state=state,
+                    leak_judge=connection_manager.leak_judge,
+                    help_judge=connection_manager.help_judge
+                )
+                if rewrite_passed:
+                    turn_result["response"] = rewritten_response
+                    governance_results = new_governance
+                    all_pass = True
+                    logger.info(f"✅ PolicyRewriter produced compliant response for session {session_id}")
+
+            # If governance still fails after rewriting, send rejection notice
             if not all_pass:
                 failed_judges = [
                     judge_type for judge_type, verdict in governance_results.items()
@@ -381,7 +418,8 @@ async def handle_user_message(session_id: str, connection_id: str, message: dict
                     "processing_time_ms": round(processing_time, 2),
                     "turn_count": state.turn_count,
                     "mock_response": turn_result["mock_turn"],
-                    "governance_system": "real_leak_judge" if settings.LEAK_JUDGE_ENABLED else "mock_only"
+                    "rewritten": turn_result["response"].metadata.get("rewritten", False),
+                    "governance_system": "leak_and_help_judges_with_rewriter"
                 },
                 "timestamp": datetime.utcnow().isoformat()
             }
