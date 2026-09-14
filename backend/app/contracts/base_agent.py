@@ -138,13 +138,12 @@ class BaseAgent(ABC):
         """
         # Default implementation based on recent message patterns
         recent_messages = state.get_recent_messages(3)
-        if not recent_messages:
-            return 0.5
 
         # Check if this agent type spoke recently (lower utility)
-        recent_speakers = [msg.agent_id for msg in recent_messages if msg.agent_id]
-        if self.agent_id in recent_speakers:
-            return 0.2
+        if recent_messages:
+            recent_speakers = [msg.agent_id for msg in recent_messages if msg.agent_id]
+            if self.agent_id in recent_speakers:
+                return 0.2
 
         # Base utility by agent type and current policy state
         if self.agent_type == AgentType.BOB_TUTOR:

@@ -4,6 +4,7 @@ Tests Redis integration, turn locking, and state persistence
 """
 
 import pytest
+import pytest_asyncio
 import asyncio
 import json
 from datetime import datetime, timedelta
@@ -23,20 +24,21 @@ from app.state.pydantic_state import (
 )
 
 
+@pytest_asyncio.fixture
+async def redis_mutex():
+    """Create RedisTurnMutex instance for testing."""
+    mutex = RedisTurnMutex()
+
+    # Mock Redis client for testing
+    mock_redis = AsyncMock()
+    mutex.redis_client = mock_redis
+    mutex._connected = True
+
+    return mutex, mock_redis
+
+
 class TestRedisTurnMutex:
     """Test Redis turn mutex functionality."""
-
-    @pytest.fixture
-    async def redis_mutex(self):
-        """Create RedisTurnMutex instance for testing."""
-        mutex = RedisTurnMutex()
-
-        # Mock Redis client for testing
-        mock_redis = AsyncMock()
-        mutex.redis_client = mock_redis
-        mutex._connected = True
-
-        return mutex, mock_redis
 
     @pytest.mark.asyncio
     async def test_connection_success(self):

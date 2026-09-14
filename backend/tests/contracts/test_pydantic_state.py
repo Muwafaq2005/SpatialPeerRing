@@ -7,6 +7,7 @@ import pytest
 from datetime import datetime, timedelta
 from typing import Dict, Any
 import json
+from pydantic import ValidationError
 
 from app.state.pydantic_state import (
     PeerRingState,

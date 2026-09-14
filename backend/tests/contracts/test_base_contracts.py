@@ -165,7 +165,7 @@ class TestBaseJudge:
                     evaluation_time_ms=10
                 )
 
-        judge = TestJudge("batch-test")
+        judge = TestJudge("leak")
         state = PeerRingState(session_id="test")
 
         responses = [
@@ -323,9 +323,9 @@ class TestMockAgentRegistry:
 
         # Check agents are registered
         assert len(registry.list_agents()) >= 3
-        assert "bob-tutor" in registry.list_agents()
-        assert "alice-arithmetic" in registry.list_agents()
-        assert "charlie-conceptual" in registry.list_agents()
+        assert "mock-bob-tutor" in registry.list_agents()
+        assert "mock-alice-arithmetic" in registry.list_agents()
+        assert "mock-charlie-conceptual" in registry.list_agents()
 
         # Check judges are registered
         assert len(registry.list_judges()) >= 2
@@ -336,7 +336,7 @@ class TestMockAgentRegistry:
         """Test retrieving agents from registry."""
         registry = MockAgentRegistry()
 
-        bob = registry.get_agent("bob-tutor")
+        bob = registry.get_agent("mock-bob-tutor")
         assert bob is not None
         assert isinstance(bob, MockBobAgent)
 

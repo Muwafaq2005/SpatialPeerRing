@@ -15,6 +15,7 @@ from app.config import settings
 from app.state.redis_mutex import redis_mutex, TurnLockTimeoutError, RedisConnectionError
 from app.state.pydantic_state import PeerRingState, DialogueMessage, MessageRole
 from app.contracts.mock_registry import MockAgentRegistry
+from app.governance.leak_judge import LeakJudge
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,11 @@ class WebSocketConnectionManager:
         self.active_connections: Dict[str, WebSocket] = {}
         self.connection_owners: Dict[str, str] = {}  # session_id -> connection_id
         self.mock_registry = MockAgentRegistry()
+
+        # Initialize governance judges
+        self.leak_judge = LeakJudge()
+
+        logger.info("🛡️ WebSocket manager initialized with leak judge governance")
 
     async def connect(self, websocket: WebSocket, session_id: str) -> str:
         """
@@ -278,7 +284,76 @@ async def handle_user_message(session_id: str, connection_id: str, message: dict
                 state, user_content
             )
 
-            # Step 5: Save updated state to Redis
+            # GOVERNANCE: Apply leak judge evaluation on agent response
+            governance_results = {}
+
+            # Real leak judge evaluation
+            if settings.LEAK_JUDGE_ENABLED:
+                try:
+                    leak_verdict = await connection_manager.leak_judge.evaluate(
+                        text=turn_result["response"].content,
+                        patch=turn_result["response"].blackboard_patch,
+                        state=state
+                    )
+                    governance_results["leak"] = leak_verdict
+
+                    # Log governance decision
+                    logger.info(
+                        f"🛡️ Leak judge: session={session_id}, "
+                        f"verdict={'PASS' if leak_verdict.verdict else 'FAIL'}, "
+                        f"confidence={leak_verdict.confidence:.2f}, "
+                        f"time={leak_verdict.evaluation_time_ms}ms"
+                    )
+
+                except Exception as e:
+                    logger.error(f"Leak judge error for session {session_id}: {e}")
+                    # Use mock leak judge as fallback
+                    governance_results["leak"] = turn_result["governance"]["leak"]
+            else:
+                # Use mock governance when disabled
+                governance_results["leak"] = turn_result["governance"]["leak"]
+
+            # Use mock help judge for now (Task #8 will replace this)
+            governance_results["help"] = turn_result["governance"]["help"]
+
+            # Check if response passes all governance
+            all_pass = all(verdict.verdict for verdict in governance_results.values())
+
+            # If governance fails, send rejection notice
+            if not all_pass:
+                failed_judges = [
+                    judge_type for judge_type, verdict in governance_results.items()
+                    if not verdict.verdict
+                ]
+
+                await connection_manager.send_personal_message(
+                    {
+                        "type": "GOVERNANCE_REJECTION",
+                        "message": "Response rejected by governance system",
+                        "failed_judges": failed_judges,
+                        "governance_results": {
+                            judge_type: {
+                                "verdict": verdict.verdict,
+                                "confidence": verdict.confidence,
+                                "reasoning": verdict.reasoning,
+                                "suggested_fixes": verdict.suggested_fixes
+                            }
+                            for judge_type, verdict in governance_results.items()
+                        },
+                        "timestamp": datetime.utcnow().isoformat()
+                    },
+                    session_id
+                )
+
+                logger.warning(
+                    f"🚫 Governance rejection: session={session_id}, "
+                    f"failed_judges={failed_judges}"
+                )
+
+                # Don't save state or add response to history for failed governance
+                return
+
+            # Step 5: Save updated state to Redis (only if governance passes)
             await redis_mutex.save_state(state)
 
             # Step 6: Stream response back to client
@@ -295,16 +370,18 @@ async def handle_user_message(session_id: str, connection_id: str, message: dict
                     judge_type: {
                         "verdict": verdict.verdict,
                         "confidence": verdict.confidence,
-                        "reasoning": verdict.reasoning
+                        "reasoning": verdict.reasoning,
+                        "evaluation_time_ms": verdict.evaluation_time_ms
                     }
-                    for judge_type, verdict in turn_result["governance"].items()
+                    for judge_type, verdict in governance_results.items()
                 },
                 "metadata": {
                     "candidates": turn_result["candidates"],
-                    "passed_governance": turn_result["passed_governance"],
+                    "passed_governance": all_pass,
                     "processing_time_ms": round(processing_time, 2),
                     "turn_count": state.turn_count,
-                    "mock_response": turn_result["mock_turn"]
+                    "mock_response": turn_result["mock_turn"],
+                    "governance_system": "real_leak_judge" if settings.LEAK_JUDGE_ENABLED else "mock_only"
                 },
                 "timestamp": datetime.utcnow().isoformat()
             }
@@ -314,7 +391,8 @@ async def handle_user_message(session_id: str, connection_id: str, message: dict
             logger.info(
                 f"✅ Turn completed: session={session_id}, "
                 f"winner={turn_result['winner']}, "
-                f"processing_time={processing_time:.1f}ms"
+                f"processing_time={processing_time:.1f}ms, "
+                f"governance={'PASS' if all_pass else 'FAIL'}"
             )
 
         except Exception as e:
