@@ -1,6 +1,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.pyc
 .pytest_cache/
 .coverage
 htmlcov/
@@ -13,3 +14,5 @@ env/
 venv/
 .DS_Store
 Thumbs.db
+node_modules/
+.next/
