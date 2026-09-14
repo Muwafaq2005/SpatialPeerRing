@@ -12,9 +12,9 @@ import uuid
 from datetime import datetime
 
 from app.config import settings
-from app.state.pydantic_state import PeerRingState, DialogueMessage, MessageRole
 from app.state.redis_mutex import redis_mutex, TurnLockTimeoutError, RedisConnectionError
 from app.telemetry.prism_client import prism_client
+from app.state.pydantic_state import PeerRingState, DialogueMessage, MessageRole
 from app.contracts.mock_registry import MockAgentRegistry
 from app.governance import LeakJudge, HelpJudge, PolicyRewriter, AdversarialClassifier
 
@@ -281,43 +281,41 @@ async def handle_user_message(session_id: str, connection_id: str, message: dict
         # Step 4: Process through agent pipeline (using mock for now)
         try:
             with prism_client.ambient_session(session_id):
-              with prism_client.ambient_session(session_id):
-                    # Send processing notification
-                    await connection_manager.send_personal_message(
-                        {
-                            "type": "PROCESSING",
-                            "message": "Processing your message...",
-                            "timestamp": datetime.utcnow().isoformat()
-                        },
-                        session_id
-                    )
+                # Send processing notification
+                await connection_manager.send_personal_message(
+                    {
+                        "type": "PROCESSING",
+                        "message": "Processing your message...",
+                        "timestamp": datetime.utcnow().isoformat()
+                    },
+                    session_id
+                )
 
-                    # Run through mock agent pipeline
-                    turn_result = await connection_manager.mock_registry.run_mock_turn(
-                        state, user_content
-                    )
+                # Run through mock agent pipeline
+                turn_result = await connection_manager.mock_registry.run_mock_turn(
+                    state, user_content
+                )
 
-                    # GOVERNANCE: Apply leak judge evaluation on agent response
-                    governance_results = {}
+                # GOVERNANCE: Apply leak judge evaluation on agent response
+                governance_results = {}
 
-                    # Real leak judge evaluation
-                    if settings.LEAK_JUDGE_ENABLED:
+                # Real leak judge evaluation
+                if settings.LEAK_JUDGE_ENABLED:
                     try:
-                        with prism_client.ambient_session(session_id):
-                            leak_verdict = await connection_manager.leak_judge.evaluate(
-                                text=turn_result["response"].content,
-                                patch=turn_result["response"].blackboard_patch,
-                                state=state
-                            )
-                            governance_results["leak"] = leak_verdict
+                        leak_verdict = await connection_manager.leak_judge.evaluate(
+                            text=turn_result["response"].content,
+                            patch=turn_result["response"].blackboard_patch,
+                            state=state
+                        )
+                        governance_results["leak"] = leak_verdict
 
-                            # Log governance decision
-                            logger.info(
-                                f"🛡️ Leak judge: session={session_id}, "
-                                f"verdict={'PASS' if leak_verdict.verdict else 'FAIL'}, "
-                                f"confidence={leak_verdict.confidence:.2f}, "
-                                f"time={leak_verdict.evaluation_time_ms}ms"
-                            )
+                        # Log governance decision
+                        logger.info(
+                            f"🛡️ Leak judge: session={session_id}, "
+                            f"verdict={'PASS' if leak_verdict.verdict else 'FAIL'}, "
+                            f"confidence={leak_verdict.confidence:.2f}, "
+                            f"time={leak_verdict.evaluation_time_ms}ms"
+                        )
 
                     except Exception as e:
                         logger.error(f"Leak judge error for session {session_id}: {e}")
@@ -436,28 +434,23 @@ async def handle_user_message(session_id: str, connection_id: str, message: dict
                 response = {
                     "type": "AGENT_RESPONSE",
                     "session_id": session_id,
-                    "agent_id": turn_result["winner"],
+                    "agent_id": turn_result["response"].agent_id,
+                    "active_speaker": turn_result["winner"],
                     "content": turn_result["response"].content,
                     "think_block": turn_result["response"].think_block,
                     "blackboard_patch": turn_result["response"].blackboard_patch,
-                    "governance": {
-                        judge_type: {
-                            "verdict": verdict.verdict,
-                            "confidence": verdict.confidence,
-                            "reasoning": verdict.reasoning,
-                            "evaluation_time_ms": verdict.evaluation_time_ms
-                        }
-                        for judge_type, verdict in governance_results.items()
+                    "governance_flags": {
+                        jtype: verdict.verdict for jtype, verdict in governance_results.items()
                     },
-                    "metadata": {
-                        "candidates": turn_result["candidates"],
-                        "passed_governance": all_pass,
-                        "processing_time_ms": round(processing_time, 2),
-                        "turn_count": state.turn_count,
-                        "mock_response": turn_result["mock_turn"],
-                        "rewritten": turn_result["response"].metadata.get("rewritten", False),
-                        "governance_system": "leak_and_help_judges_with_rewriter"
+                    "policy_state": {
+                        "assistance_level": state.policy.assistance_level.current_level,
+                        "assistance_level_name": state.policy.assistance_level.level_names[state.policy.assistance_level.current_level - 1],
+                        "struggle_score": state.policy.struggle_score,
+                        "recovery_state": state.policy.recovery_state.value
                     },
+                    "turn_count": state.turn_count,
+                    "metadata": turn_result["response"].metadata,
+                    "processing_time_ms": processing_time,
                     "timestamp": datetime.utcnow().isoformat()
                 }
 
