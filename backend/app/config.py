@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     # Governance Settings
     LEAK_JUDGE_ENABLED: bool = True
     HELP_JUDGE_ENABLED: bool = True
+    POLICY_REWRITER_ENABLED: bool = True
+    POLICY_REWRITER_MAX_RETRIES: int = 2
     ADVERSARIAL_RESISTANCE_ENABLED: bool = True
 
     class Config:

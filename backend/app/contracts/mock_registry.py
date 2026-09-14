@@ -6,6 +6,7 @@ Provides mock implementations so usm and muw can develop without live LLM agents
 from typing import Optional, Dict, Any, List
 import asyncio
 import random
+import logging
 from datetime import datetime
 
 from app.contracts.base_agent import BaseAgent
@@ -19,6 +20,8 @@ from app.state.pydantic_state import (
     DialogueMessage,
     MessageRole
 )
+
+logger = logging.getLogger(__name__)
 
 
 class MockBobAgent(BaseAgent):
@@ -339,9 +342,9 @@ class MockAgentRegistry:
     def __init__(self):
         """Initialize registry with all mock implementations."""
         self.agents: Dict[str, BaseAgent] = {
-            "bob-tutor": MockBobAgent(),
-            "alice-arithmetic": MockAliceAgent(),
-            "charlie-conceptual": MockCharlieAgent(),
+            "mock-bob-tutor": MockBobAgent(),
+            "mock-alice-arithmetic": MockAliceAgent(),
+            "mock-charlie-conceptual": MockCharlieAgent(),
         }
 
         self.judges: Dict[str, BaseJudge] = {
