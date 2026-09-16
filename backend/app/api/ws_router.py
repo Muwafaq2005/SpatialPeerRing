@@ -16,6 +16,7 @@ from app.state.redis_mutex import redis_mutex, TurnLockTimeoutError, RedisConnec
 from app.telemetry.prism_client import prism_client
 from app.state.pydantic_state import PeerRingState, DialogueMessage, MessageRole
 from app.contracts.mock_registry import MockAgentRegistry
+from app.agents.orchestrator import PedagogicalOrchestrator
 from app.governance import LeakJudge, HelpJudge, PolicyRewriter, AdversarialClassifier
 
 logger = logging.getLogger(__name__)
@@ -38,6 +39,7 @@ class WebSocketConnectionManager:
         self.active_connections: Dict[str, WebSocket] = {}
         self.connection_owners: Dict[str, str] = {}  # session_id -> connection_id
         self.mock_registry = MockAgentRegistry()
+        self.orchestrator = PedagogicalOrchestrator()
 
         # Initialize governance judges and rewriter
         self.leak_judge = LeakJudge()
@@ -114,18 +116,15 @@ class WebSocketConnectionManager:
         Args:
             session_id: Session identifier
         """
-        if session_id in self.active_connections:
-            del self.active_connections[session_id]
+        self.active_connections.pop(session_id, None)
 
         # Release any turn locks owned by this connection
-        if session_id in self.connection_owners:
-            connection_id = self.connection_owners[session_id]
+        connection_id = self.connection_owners.pop(session_id, None)
+        if connection_id:
             try:
                 await redis_mutex.release_turn_lock(session_id, connection_id)
             except Exception as e:
                 logger.warning(f"Lock release on disconnect failed: {e}")
-
-            del self.connection_owners[session_id]
 
         logger.info(f"🔌 WebSocket disconnected: session={session_id}")
 
@@ -291,10 +290,15 @@ async def handle_user_message(session_id: str, connection_id: str, message: dict
                     session_id
                 )
 
-                # Run through mock agent pipeline
-                turn_result = await connection_manager.mock_registry.run_mock_turn(
+                # Run through live agent orchestrator pipeline
+                agent_resp, orchestrator_meta = await connection_manager.orchestrator.orchestrate_turn(
                     state, user_content
                 )
+                turn_result = {
+                    "response": agent_resp,
+                    "winner": agent_resp.agent_id,
+                    "orchestration": orchestrator_meta
+                }
 
                 # GOVERNANCE: Apply leak judge evaluation on agent response
                 governance_results = {}

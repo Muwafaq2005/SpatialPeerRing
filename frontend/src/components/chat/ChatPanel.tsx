@@ -9,7 +9,7 @@ interface ChatPanelProps {
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({ messages, onSendMessage, isConnected }) => {
   const [input, setInput] = useState('');
-  const [showThinkBlocks, setShowThinkBlocks] = useState(true);
+  const [showThinkBlocks, setShowThinkBlocks] = useState(false);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

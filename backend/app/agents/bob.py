@@ -260,11 +260,33 @@ class BobAgent(BaseAgent):
         Calls live LLM if API key is present, otherwise executes deterministic
         Socratic heuristic reasoning engine for offline/test reliability.
         """
-        # Check if OpenAI API key is configured
-        if settings.OPENAI_API_KEY and settings.OPENAI_API_KEY.startswith("sk-"):
+        # Check Groq API key first, then fallback to OpenAI API key
+        groq_key = settings.GROQ_API_KEY or (settings.OPENAI_API_KEY if settings.OPENAI_API_KEY.startswith("gsk_") else "")
+        openai_key = settings.OPENAI_API_KEY if settings.OPENAI_API_KEY.startswith("sk-") else ""
+
+        if groq_key:
             try:
                 from openai import AsyncOpenAI
-                client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+                client = AsyncOpenAI(
+                    api_key=groq_key,
+                    base_url="https://api.groq.com/openai/v1"
+                )
+                resp = await client.chat.completions.create(
+                    model=settings.GROQ_MODEL or "llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=self.temperature,
+                    max_tokens=settings.MAX_TOKENS,
+                )
+                raw_text = resp.choices[0].message.content or ""
+                tokens = resp.usage.total_tokens if resp.usage else 120
+                return raw_text, tokens
+            except Exception as e:
+                logger.warning(f"Live Groq LLM call failed ({e}). Falling back to Socratic heuristic engine.")
+
+        elif openai_key:
+            try:
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(api_key=openai_key)
                 resp = await client.chat.completions.create(
                     model=self.model_name,
                     messages=[{"role": "user", "content": prompt}],

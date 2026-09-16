@@ -203,10 +203,32 @@ class CharlieAgent(BaseAgent):
         self, prompt: str, state: PeerRingState, action: CandidateAction
     ) -> Tuple[str, int, ConceptualErrorType]:
         """Call live LLM or execute deterministic heuristic generator."""
-        if settings.OPENAI_API_KEY and settings.OPENAI_API_KEY.startswith("sk-"):
+        groq_key = settings.GROQ_API_KEY or (settings.OPENAI_API_KEY if settings.OPENAI_API_KEY.startswith("gsk_") else "")
+        openai_key = settings.OPENAI_API_KEY if settings.OPENAI_API_KEY.startswith("sk-") else ""
+
+        if groq_key:
             try:
                 from openai import AsyncOpenAI
-                client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
+                client = AsyncOpenAI(
+                    api_key=groq_key,
+                    base_url="https://api.groq.com/openai/v1"
+                )
+                resp = await client.chat.completions.create(
+                    model=settings.GROQ_MODEL or "llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.7,
+                    max_tokens=settings.MAX_TOKENS,
+                )
+                raw_text = resp.choices[0].message.content or ""
+                tokens = resp.usage.total_tokens if resp.usage else 115
+                return raw_text, tokens, ConceptualErrorType.ORDER_OF_OPERATIONS
+            except Exception as e:
+                logger.warning(f"Live Groq LLM call failed ({e}). Falling back to heuristic peer.")
+
+        elif openai_key:
+            try:
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(api_key=openai_key)
                 resp = await client.chat.completions.create(
                     model=self.model_name,
                     messages=[{"role": "user", "content": prompt}],

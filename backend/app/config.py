@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     REDIS_TURN_LOCK_TTL: int = 30  # seconds
 
     # LLM Provider Settings
+    GROQ_API_KEY: str = ""
+    GROQ_MODEL: str = "qwen/qwen3.6-27b"
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
 
@@ -49,7 +51,7 @@ class Settings(BaseSettings):
 
     # Agent Configuration
     DEFAULT_MODEL: str = "gpt-4"
-    MAX_TOKENS: int = 2048
+    MAX_TOKENS: int = 512
     TEMPERATURE: float = 0.7
 
     # Governance Settings
