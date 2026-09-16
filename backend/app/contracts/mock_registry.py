@@ -252,17 +252,12 @@ class MockLeakJudge(BaseJudge):
         # Simple mock logic: fail if contains complete solutions
         leak_indicators = [
             "the answer is",
-            "= 3x + 12",  # Complete solution
+            "is 3x + 12",  # Complete solution match
             "x = 5",      # Final answer
             "solution:",
         ]
 
-        has_leak = any(indicator.lower() in text.lower() for indicator in leak_indicators)
-
-        # Also check blackboard patches for complete solutions
-        if patch and ("=" in patch and "x" in patch):
-            if len(patch.split("=")) > 2:  # Multiple equals signs = complete work
-                has_leak = True
+        has_leak = any(indicator in text.lower() for indicator in leak_indicators)
 
         confidence = 0.9 if has_leak else 0.85
 

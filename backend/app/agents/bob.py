@@ -279,7 +279,8 @@ class BobAgent(BaseAgent):
                 )
                 raw_text = resp.choices[0].message.content or ""
                 tokens = resp.usage.total_tokens if resp.usage else 120
-                return raw_text, tokens
+                if raw_text:
+                    return raw_text, tokens
             except Exception as e:
                 logger.warning(f"Live Groq LLM call failed ({e}). Falling back to Socratic heuristic engine.")
 

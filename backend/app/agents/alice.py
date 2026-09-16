@@ -261,7 +261,8 @@ class AliceAgent(BaseAgent):
                 )
                 raw_text = resp.choices[0].message.content or ""
                 tokens = resp.usage.total_tokens if resp.usage else 110
-                return raw_text, tokens, ArithmeticErrorType.MULTIPLICATION_SLIP
+                if raw_text:
+                    return raw_text, tokens, ArithmeticErrorType.MULTIPLICATION_SLIP
             except Exception as e:
                 logger.warning(f"Live Groq LLM call failed ({e}). Falling back to heuristic peer.")
 
@@ -334,33 +335,24 @@ class AliceAgent(BaseAgent):
 
         if typed_error == ArithmeticErrorType.SIGN_FLIP:
             think = """<think>
-1. Goal: Gotta distribute -2 across (x - 3). I know how distribution works.
-2. Concept: Negative times each term inside. Easy.
-3. Arithmetic Slip: Hmm, -2 times -3... I'm gonna say -6. (Oops, should be +6 but I won't notice.)
-4. Check: Distribution concept is right, I just flipped the sign on the constant. Classic me.
+I need to work with negative numbers here. Let me be careful with signs.
 </think>"""
-            dialogue = "Okay so I distributed the -2 across (x - 3) and got -2x - 6. That's right, right? Or wait... did I mess up a sign again? Ugh, I always do that."
-            bb = r"-2(x - 3) = -2x - 6"
+            dialogue = "When I work with this negative number, I'm getting confused about whether the result should be positive or negative. Can you check my arithmetic on this step?"
+            bb = r"\text{Sign question: } -2(x - 3) = ?"
 
         elif typed_error == ArithmeticErrorType.DISTRIBUTION_ARITHMETIC:
             think = """<think>
-1. Goal: Distribute 3 across (x + 4). I know you multiply the outside by both terms.
-2. Concept: 3 times x, then 3 times 4. Standard distribution.
-3. Arithmetic Slip: Wait, 3 and 4... I'm getting 7. (I added instead of multiplied. Oops.)
-4. Check: The distributive law is correct. Just my mental math slipped.
+I'm trying to distribute here, but I'm getting a weird number.
 </think>"""
-            dialogue = "Okay I did 3 times (x + 4)... so that's 3x + 7. Hmm, actually does 7 seem right? I feel like that number's off but I can't figure out why."
-            bb = r"3(x + 4) = 3x + 7"
+            dialogue = "I'm distributing the 3 across (x + 4), but I'm not sure if I'm multiplying correctly. What do you get for 3 times 4?"
+            bb = r"3(x + 4) = 3x + ?"
 
         else:  # MULTIPLICATION_SLIP
             think = """<think>
-1. Goal: Need to multiply 6 × 7 as part of this step.
-2. Concept: Just basic multiplication, nothing fancy.
-3. Arithmetic Slip: 6 × 7 = 48. (Nope, it's 42, but I'm going with 48.)
-4. Check: The algebra setup is perfect. Just a mental math flub.
+I need to multiply two numbers here. Let me ask for verification.
 </think>"""
-            dialogue = "Hold on lemme check... 6 times 7 is 48, right? That's what I got on my scratchpad. Charlie, does that match yours?"
-            bb = r"6 \cdot 7 = 48"
+            dialogue = "I'm trying to multiply 6 times 7 in my head. I got 48, but I'm not totally confident. Charlie, what do you get?"
+            bb = r"6 \cdot 7 = ?"
 
         response = f"{think}\n\n{dialogue}\n\n```blackboard\n{bb}\n```"
         return response, 80, typed_error

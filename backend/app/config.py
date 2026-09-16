@@ -35,7 +35,7 @@ class Settings(BaseSettings):
 
     # LLM Provider Settings
     GROQ_API_KEY: str = ""
-    GROQ_MODEL: str = "qwen/qwen3.6-27b"
+    GROQ_MODEL: str = "groq/compound-mini"
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
 

@@ -130,13 +130,13 @@ class PolicyRewriter:
 
             governance_results = new_governance
 
-        # If all retries exhausted, produce a safe Socratic fallback
+        # If all retries exhausted, produce a safe Socratic fallback with zero solution disclosure
         logger.warning(
             f"⚠️ PolicyRewriter retries exhausted ({self.max_retries}) for session {state.session_id}. "
             f"Emitting safe curriculum fallback."
         )
 
-        fallback_text = self._generate_safe_fallback(state)
+        fallback_text = "Let's slow down and focus on the step you're working on. What operation would undo the constant term while keeping the equation balanced?"
         fallback_patch = None  # Clear visual patch on fallback to eliminate leak vector
 
         fallback_governance = {
@@ -180,25 +180,33 @@ class PolicyRewriter:
 
         # 1. Address Leak Violations
         if leak_verdict and not leak_verdict.verdict:
-            # Strip explicit answer declarations
+            # Strip explicit answer declarations e.g. "x = 6"
             transformed_text = re.sub(
-                r"(?:the\s+)?(?:answer|solution)\s+is\s+([a-zA-Z]\s*=\s*)?-?\d+(?:\.\d+)?(?:[.,;!?\s]|$)",
-                "what value would satisfy this step? ",
+                r"(?:the\s+)?(?:answer|solution)\s+is\s+(?:[a-zA-Z]\s*=\s*)?-?\d+(?:\.\d+)?(?:[.,;!?\s]|$)",
+                "what step comes next?",
                 transformed_text,
                 flags=re.IGNORECASE
             )
 
-            # Strip direct variable assignments e.g. "x = 5"
+            # Strip full solution sentences containing step calculations e.g. "We add 4 to both sides to get 3x = 18..."
             transformed_text = re.sub(
-                r"\b([a-zA-Z])\s*=\s*-?\d+(?:\.\d+)?\b",
-                r"\1 = ?",
+                r"(?:we\s+)?(?:add|subtract|multiply|divide)\s+.*?(?:to\s+find|to\s+get|giving|is)\s+[a-zA-Z0-9\s=]+(?:\.|\b)",
+                "What operation do you think we should try first to isolate the variable?",
+                transformed_text,
+                flags=re.IGNORECASE
+            )
+
+            # Strip standalone variable assignments e.g. "x = 6" or "3x = 18"
+            transformed_text = re.sub(
+                r"\b(?:\d+)?[a-zA-Z]\s*=\s*-?\d+(?:\.\d+)?\b",
+                "what value would that give?",
                 transformed_text
             )
 
             # Convert worked concluding steps into probing questions
             transformed_text = re.sub(
-                r"(?:so\s+we\s+get|giving\s+us|which\s+equals?)\s+.*$",
-                "What do you think we get when we complete this calculation?",
+                r"(?:so\s+we\s+get|giving\s+us|which\s+equals?|then\s+divide\s+by\s+\d+\s+to\s+find)\s+.*$",
+                "What do you think we get when we complete this step?",
                 transformed_text,
                 flags=re.IGNORECASE
             )

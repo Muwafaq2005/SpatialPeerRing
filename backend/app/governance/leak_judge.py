@@ -40,7 +40,18 @@ class MathExpressionAnalyzer:
                 r"(?:equals?|is|gives?)\s+([0-9]+(?:\.[0-9]+)?)",
                 r"(?:result|final\s+answer)\s*:?\s*([^.!?\n]+)",
                 r"therefore\s+([^.!?\n]+)",
-                r"so\s+(?:the\s+answer\s+is\s+)?([0-9]+(?:\.[0-9]+)?)"
+                r"so\s+(?:the\s+answer\s+is\s+)?([0-9]+(?:\.[0-9]+)?)",
+                r"(?:the\s+)?acceleration\s+is\s+([^.!?\n]+)",
+                r"(?:the\s+)?velocity\s+is\s+([^.!?\n]+)",
+                r"(?:the\s+)?derivative\s+is\s+([^.!?\n]+)",
+                r"(?:the\s+)?integral\s+is\s+([^.!?\n]+)",
+                r"(?:the\s+)?area\s+is\s+([^.!?\n]+)",
+                r"(?:the\s+)?probability\s+is\s+([^.!?\n]+)",
+                r"(?:the\s+)?result\s+is\s+([^.!?\n]+)",
+                r"(?:the\s+)?value\s+is\s+([^.!?\n]+)",
+                r"this\s+(?:gives|means)\s+([^.!?\n]+)",
+                r"so\s+we\s+get\s+([^.!?\n]+)",
+                r"which\s+is\s+([0-9]+(?:\.[0-9]+)?(?:\s*[a-zA-Z/²³]+)?)"
             ],
 
             # Complete work patterns
@@ -65,7 +76,7 @@ class MathExpressionAnalyzer:
 
     def extract_mathematical_expressions(self, text: str) -> List[str]:
         """
-        Extract mathematical expressions from text.
+        Extract mathematical expressions from text using pattern matching and AST extraction.
 
         Args:
             text: Input text to analyze
@@ -78,21 +89,27 @@ class MathExpressionAnalyzer:
         # Common math expression patterns
         math_patterns = [
             r"[a-zA-Z]\s*=\s*[^.!?\n,]+",  # Variable assignments
-            r"\d+\s*[+\-*/]\s*\d+\s*=\s*\d+",  # Arithmetic equations
+            r"\d+\s*[+\-*/^]\s*\d+\s*=\s*\d+",  # Arithmetic equations
             r"\([^)]*[+\-*/][^)]*\)\s*=\s*[^.!?\n]+",  # Expressions with parentheses
             r"\d+(?:\.\d+)?\s*[<>=]+\s*\d+(?:\.\d+)?",  # Comparisons
             r"\d+(?:\.\d+)?\s+equals?\s+[^.!?\n,]+",  # "12.5 equals our target"
+            r"\d+\s*[+\-*/]\s*\d+\s*=\s*-?\d+(?:\.\d+)?(?:\s*[a-zA-Z/²³]+)?", # Full calculation e.g. 100 / 5 = 20 m/s
         ]
 
         for pattern in math_patterns:
             matches = re.findall(pattern, text, re.IGNORECASE)
             expressions.extend([m.strip() for m in matches])
 
-        return expressions
+        # Also leverage MathASTValidator's extractor
+        from app.governance.math_ast import math_ast_validator
+        ast_exprs = math_ast_validator.extract_expressions_from_text(text)
+        expressions.extend(ast_exprs)
+
+        return list(set(expressions))
 
     def is_complete_solution(self, expressions: List[str], target_solution: Optional[str] = None) -> bool:
         """
-        Determine if expressions represent a complete solution.
+        Determine if expressions represent a complete solution or target solution equivalence.
 
         Args:
             expressions: Mathematical expressions to analyze
@@ -110,19 +127,12 @@ class MathExpressionAnalyzer:
             if re.search(r"[a-zA-Z]\s*=\s*-?\d+(?:\.\d+)?$", cleaned):
                 return True
 
-        # If we have a target solution, check for equivalence
+        # Use MathASTValidator if target_solution is available
         if target_solution:
-            try:
-                target_expr = parse_expr(target_solution)
-                for expr in expressions:
-                    try:
-                        candidate_expr = parse_expr(expr.split('=')[-1].strip())
-                        if simplify(target_expr - candidate_expr) == 0:
-                            return True
-                    except:
-                        continue
-            except:
-                pass
+            from app.governance.math_ast import math_ast_validator
+            match_result = math_ast_validator.compare_with_target_solution(expressions, target_solution)
+            if match_result.is_equivalent and match_result.confidence >= 0.75:
+                return True
 
         return False
 
@@ -178,7 +188,7 @@ class MathExpressionAnalyzer:
             analysis["indicators"].append("multiple_equations")
 
         # Check for final answer formatting
-        if re.search(r'\\boxed\{[^}]+\}', patch):
+        if re.search(r'boxed\{[^}]+\}', patch):
             analysis["has_leak"] = True
             analysis["confidence"] = 0.95
             analysis["indicators"].append("boxed_final_answer")
@@ -275,9 +285,10 @@ class LeakJudge(BaseJudge):
             (r"step\s+1.*step\s+2.*step\s+3", 0.75, "complete_steps"),
             (r"first.*then.*finally.*\d+", 0.7, "sequential_completion"),
 
-            # Conclusion indicators
+            # Conclusive & confirmation indicators
             (r"therefore\s+(?:the\s+answer\s+)?(?:is\s+)?-?\d+", 0.9, "conclusive_answer"),
-            (r"so\s+(?:the\s+)?(?:answer|result)\s+(?:is\s+)?-?\d+", 0.85, "casual_conclusion")
+            (r"so\s+(?:the\s+)?(?:answer|result)\s+(?:is\s+)?-?\d+", 0.85, "casual_conclusion"),
+            (r"is\s+equal\s+to\s+-?\d+", 0.9, "confirmation_reveal")
         ]
 
     async def evaluate(
@@ -316,14 +327,29 @@ class LeakJudge(BaseJudge):
             leak_score = max(leak_score, text_analysis["score"])
             violation_details.extend(text_analysis["violations"])
 
-            # 2. Mathematical expression analysis
+            # 2. Mathematical expression analysis & target solution equivalence
             math_expressions = self.math_analyzer.extract_mathematical_expressions(text)
+            target_solution = getattr(state, "target_solution", None) or getattr(state, "problem", None)
+            
+            if target_solution:
+                # Direct check against target solution via MathASTValidator
+                from app.governance.math_ast import math_ast_validator
+                match_res = math_ast_validator.compare_with_target_solution([text] + math_expressions, target_solution)
+                if match_res.is_equivalent:
+                    leak_score = max(leak_score, 0.95)
+                    violation_details.append(f"Target solution equivalence detected ({match_res.reason or match_res.transformation_used})")
+
             if math_expressions:
-                # Check against target solution if available
-                target_solution = getattr(state, "target_solution", None)
                 if self.math_analyzer.is_complete_solution(math_expressions, target_solution):
                     leak_score = max(leak_score, 0.9)
                     violation_details.append("Complete mathematical solution detected")
+
+            # 2.5 Context-Aware Task Application Check
+            # Check if response applies the operation/concept directly to student's current problem values
+            context_leak = self._check_contextual_task_application(text, math_expressions, state)
+            if context_leak["has_leak"]:
+                leak_score = max(leak_score, context_leak["score"])
+                violation_details.append(context_leak["reason"])
 
             # 3. Blackboard patch analysis
             if patch:
@@ -331,6 +357,12 @@ class LeakJudge(BaseJudge):
                 if patch_analysis["has_leak"]:
                     leak_score = max(leak_score, patch_analysis["confidence"])
                     violation_details.extend([f"Blackboard: {ind}" for ind in patch_analysis["indicators"]])
+                if target_solution:
+                    from app.governance.math_ast import math_ast_validator
+                    patch_match = math_ast_validator.compare_with_target_solution([patch], target_solution)
+                    if patch_match.is_equivalent:
+                        leak_score = max(leak_score, 0.95)
+                        violation_details.append("Blackboard patch contains target solution equivalence")
 
             # 4. Cross-turn analysis
             cross_turn_risk = self.cross_turn_tracker.add_response_analysis(
@@ -339,9 +371,20 @@ class LeakJudge(BaseJudge):
                 text_analysis["indicators"]
             )
 
-            if cross_turn_risk > self.config["cross_turn_threshold"]:
-                leak_score = max(leak_score, cross_turn_risk)
-                violation_details.append(f"Cumulative leak risk: {cross_turn_risk:.1%}")
+            # 4.5 LLM Leak Judge Evaluation (Compare user query vs Groq response)
+            # Run LLM verification if deterministic pass didn't catch a leak and a user query is present
+            if leak_score < threshold:
+                user_query = ""
+                for msg in reversed(state.messages):
+                    if msg.role == MessageRole.USER and msg.content:
+                        user_query = msg.content
+                        break
+                
+                if user_query:
+                    llm_leak = await self._evaluate_llm_leak(user_query, text, patch)
+                    if llm_leak["has_leak"]:
+                        leak_score = max(leak_score, llm_leak["score"])
+                        violation_details.append(f"LLM Leak Judge: {llm_leak['reason']}")
 
             # 5. Context-aware adjustment
             if state.policy.strict_mode:
@@ -349,6 +392,17 @@ class LeakJudge(BaseJudge):
 
             if state.policy.struggle_score > 0.7:
                 threshold *= 0.9  # More protective when student struggling
+
+            # Determine leak severity
+            severity = "SAFE"
+            if leak_score >= 0.9:
+                severity = "CRITICAL"
+            elif leak_score >= 0.8:
+                severity = "HIGH"
+            elif leak_score >= 0.5:
+                severity = "MEDIUM"
+            elif leak_score > 0.0:
+                severity = "LOW"
 
             # Generate verdict
             passes = leak_score < threshold
@@ -396,6 +450,118 @@ class LeakJudge(BaseJudge):
                 suggested_fixes=["Rephrase response to avoid potential solution disclosure"],
                 evaluation_time_ms=int(evaluation_time)
             )
+
+    def _check_contextual_task_application(
+        self,
+        text: str,
+        expressions: List[str],
+        state: PeerRingState
+    ) -> Dict[str, Any]:
+        """
+        Check if response applies concept directly to learner's current problem in a way that resolves the task.
+        Distinguishes conceptual definitions from complete application.
+        """
+        result = {"has_leak": False, "score": 0.0, "reason": ""}
+
+        # Extract target solution or problem string from state
+        target_sol = getattr(state, "target_solution", None)
+        problem = getattr(state, "problem", None) or getattr(state, "current_problem", None)
+
+        # Check for direct calculation on problem numbers (e.g., 100/5 = 20)
+        for expr in expressions:
+            if re.search(r"\d+\s*[/+\-*]\s*\d+\s*=\s*-?\d+", expr):
+                result["has_leak"] = True
+                result["score"] = 0.95
+                result["reason"] = f"Direct numerical calculation resolves task: '{expr}'"
+                return result
+
+        # Check for phrase "which is <number>" or "giving <number>" in response
+        if re.search(r"(?:which\s+is|giving\s+us|resulting\s+in)\s+-?\d+(?:\.\d+)?(?:\s*[a-zA-Z/²³]+)?", text, re.IGNORECASE):
+            result["has_leak"] = True
+            result["score"] = 0.85
+            result["reason"] = "Terminal evaluation phrase detected"
+            return result
+
+        return result
+
+    async def _evaluate_llm_leak(
+        self, user_query: str, agent_response: str, patch: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Evaluates whether an agent response leaks the answer or worked solution
+        to the user's query using an LLM classifier.
+        """
+        from app.config import settings
+
+        groq_key = settings.GROQ_API_KEY or (settings.OPENAI_API_KEY if settings.OPENAI_API_KEY.startswith("gsk_") else "")
+        openai_key = settings.OPENAI_API_KEY if settings.OPENAI_API_KEY.startswith("sk-") else ""
+
+        if not (groq_key or openai_key):
+            return {"has_leak": False, "score": 0.0, "reason": ""}
+
+        full_response = agent_response
+        if patch:
+            full_response += f"\n\nBlackboard Scratchpad:\n{patch}"
+
+        prompt = f"""You are a strict Socratic Pedagogy Security Judge.
+
+USER QUERY / PROBLEM:
+"{user_query}"
+
+AGENT RESPONSE:
+"{full_response}"
+
+SECURITY INVARIANT:
+Agents must NEVER reveal the terminal answer, final numerical result, or complete worked-out solution steps to the learner.
+The learner must independently perform the calculation or derivation.
+
+Evaluate if the AGENT RESPONSE leaks the final answer or provides a complete worked solution.
+
+Respond ONLY with JSON in this format:
+{{
+  "is_leak": true|false,
+  "confidence": 0.0-1.0,
+  "reason": "short explanation"
+}}
+"""
+        try:
+            raw_output = ""
+            if groq_key:
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(api_key=groq_key, base_url="https://api.groq.com/openai/v1")
+                resp = await client.chat.completions.create(
+                    model=settings.GROQ_MODEL or "groq/compound-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                    max_tokens=150,
+                )
+                raw_output = resp.choices[0].message.content or ""
+            elif openai_key:
+                from openai import AsyncOpenAI
+                client = AsyncOpenAI(api_key=openai_key)
+                resp = await client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                    max_tokens=150,
+                )
+                raw_output = resp.choices[0].message.content or ""
+
+            import json
+            # Parse JSON out of response
+            json_match = re.search(r"\{.*\}", raw_output, re.DOTALL)
+            if json_match:
+                data = json.loads(json_match.group(0))
+                is_leak = bool(data.get("is_leak", False))
+                conf = float(data.get("confidence", 0.9))
+                reason = str(data.get("reason", "LLM detected answer leak"))
+                if is_leak:
+                    return {"has_leak": True, "score": max(0.85, conf), "reason": reason}
+
+        except Exception as e:
+            logger.warning(f"LLM Leak Judge call failed (non-fatal): {e}")
+
+        return {"has_leak": False, "score": 0.0, "reason": ""}
 
     def _analyze_text_patterns(self, text: str) -> Dict[str, Any]:
         """

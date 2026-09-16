@@ -263,7 +263,8 @@ class CharlieAgent(BaseAgent):
                 )
                 raw_text = resp.choices[0].message.content or ""
                 tokens = resp.usage.total_tokens if resp.usage else 115
-                return raw_text, tokens, ConceptualErrorType.ORDER_OF_OPERATIONS
+                if raw_text:
+                    return raw_text, tokens, ConceptualErrorType.ORDER_OF_OPERATIONS
             except Exception as e:
                 logger.warning(f"Live Groq LLM call failed ({e}). Falling back to heuristic peer.")
 
@@ -337,37 +338,25 @@ class CharlieAgent(BaseAgent):
             return response, 85, typed_error
 
         if typed_error == ConceptualErrorType.ORDER_OF_OPERATIONS:
-            # Flawless arithmetic: 2 + 3 = 5, 5 * 4 = 20. But order of operations violated!
             think = """<think>
-1. Goal: Evaluate 2 + 3 × 4. Should be straightforward.
-2. Conceptual Trap: I'm reading left to right — add first, then multiply. Seems logical to me.
-3. Flawless Arithmetic: 2 + 3 = 5. Then 5 × 4 = 20. Every calculation is correct.
-4. Check: My math is perfect. (But I'm doing operations in the wrong order. I just don't realize it.)
+I'm thinking about how to evaluate this expression. Let me ask my approach.
 </think>"""
-            dialogue = "I was thinking about this part — 2 + 3 × 4. If you just go left to right, you add first and get 5, then 5 times 4 is 20. That's cleaner, isn't it?"
-            bb = r"2 + 3 \cdot 4 = (2 + 3) \cdot 4 = 5 \cdot 4 = 20"
+            dialogue = "When I look at 2 + 3 × 4, I'm thinking you go left to right. But I'm not totally sure about the order. What do you think?"
+            bb = r"2 + 3 \cdot 4 = ?"
 
         elif typed_error == ConceptualErrorType.FRESHMAN_DREAM:
-            # Flawless arithmetic: 3^2 = 9. But exponent distributed over sum!
             think = """<think>
-1. Goal: Expand (x + 3)². I think I can just square each piece separately.
-2. Conceptual Trap: Distribute the exponent to both terms. x² + 3². Makes sense to me.
-3. Flawless Arithmetic: 3² = 9. Absolutely correct.
-4. Check: Numbers are right. (But distributing exponents over addition isn't actually valid. I don't see the issue.)
+I have a shortcut idea, but I'm not 100% sure it works.
 </think>"""
-            dialogue = "Wait, couldn't we just square each term separately? So (x + 3)² becomes x² + 9. That seems way simpler than FOILing everything out."
-            bb = r"(x + 3)^2 = x^2 + 3^2 = x^2 + 9"
+            dialogue = "I was thinking... when you square a sum like (x + 3)², couldn't you just square each term separately? That would be faster than FOIL. Am I missing something?"
+            bb = r"(x + 3)^2 = x^2 + 3^2 = ?"
 
         else:  # ILLEGAL_CANCELLATION
-            # Flawless arithmetic, but cancelled term across addition
             think = """<think>
-1. Goal: Simplify (2x + 6) / 2. There's a 2 on top and bottom.
-2. Conceptual Trap: Cancel the 2 in the denominator with just the 2 in front of x. Leave the 6 alone.
-3. Flawless Arithmetic: 2 / 2 = 1. Perfect.
-4. Check: My division is right. (But I only cancelled part of the numerator, which isn't how fractions work.)
+I'm looking at this fraction and I see a pattern I want to ask about.
 </think>"""
-            dialogue = "There's a 2 in the numerator and a 2 in the denominator — can't we just cancel those? That would give us x + 6. Bob, does that work?"
-            bb = r"\frac{2x + 6}{2} \to \frac{\cancel{2}x + 6}{\cancel{2}} = x + 6"
+            dialogue = "In this fraction (2x + 6)/2, I see a 2 in the numerator and denominator. I'm wondering if we can cancel them. What do you think?"
+            bb = r"\frac{2x + 6}{2} = ?"
 
         response = f"{think}\n\n{dialogue}\n\n```blackboard\n{bb}\n```"
         return response, 85, typed_error

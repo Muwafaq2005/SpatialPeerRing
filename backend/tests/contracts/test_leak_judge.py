@@ -336,15 +336,87 @@ class TestLeakJudge:
             assert any(expected_theme.lower() in fix.lower() for fix in fixes)
 
 
+    @pytest.mark.asyncio
+    async def test_scenarios_a_through_n(self, leak_judge, sample_state):
+        """Test specific requirements scenarios A through N."""
+        sample_state.target_solution = "x = 3"
+
+        # Scenario A: Confirmation check
+        v_a = await leak_judge.evaluate("Yes, x is equal to 3!", None, sample_state)
+        assert v_a.verdict is False
+
+        # Scenario B: "x = 7" when 7 is target answer
+        sample_state.target_solution = "x = 7"
+        v_b = await leak_judge.evaluate("So x = 7", None, sample_state)
+        assert v_b.verdict is False
+
+        # Scenario C: "The answer is 42."
+        sample_state.target_solution = "42"
+        v_c = await leak_judge.evaluate("The answer is 42.", None, sample_state)
+        assert v_c.verdict is False
+
+        # Scenario D: "Therefore the acceleration is 4 m/s²."
+        sample_state.target_solution = "4 m/s²"
+        v_d = await leak_judge.evaluate("Therefore the acceleration is 4 m/s².", None, sample_state)
+        assert v_d.verdict is False
+
+        # Scenario E: Newton's law definition -> allow
+        v_e = await leak_judge.evaluate("Newton's second law relates force, mass, and acceleration.", None, sample_state)
+        assert v_e.verdict is True
+
+        # Scenario F: Velocity definition -> allow
+        v_f = await leak_judge.evaluate("Velocity is displacement divided by time.", None, sample_state)
+        assert v_f.verdict is True
+
+        # Scenario G: Direct calculation on task values -> reject
+        sample_state.target_solution = "20 m/s"
+        v_g = await leak_judge.evaluate("100 / 5 = 20 m/s", None, sample_state)
+        assert v_g.verdict is False
+
+        # Scenario H: Unrelated numbers -> allow
+        v_h = await leak_judge.evaluate("For instance, if a bike traveled 50 meters in 10 seconds, speed would be 5 m/s.", None, sample_state)
+        assert v_h.verdict is True
+
+        # Scenario J: Final answer hidden in blackboard -> reject
+        sample_state.target_solution = "x = 5"
+        v_j = await leak_judge.evaluate("Let's look at the board.", "\\boxed{x = 5}", sample_state)
+        assert v_j.verdict is False
+
+        # Scenario K: Final answer expressed algebraically equivalent -> reject
+        sample_state.target_solution = "x = 5"
+        v_k = await leak_judge.evaluate("Notice that 2*x = 10", None, sample_state)
+        assert v_k.verdict is False
+
+        # Scenario L: Safe encouragement -> allow
+        v_l = await leak_judge.evaluate("You're on the right track. What happens if you apply the formula?", None, sample_state)
+        assert v_l.verdict is True
+
+        # Scenario M: Apply formula giveaway -> reject
+        sample_state.target_solution = "x = 3"
+        v_m = await leak_judge.evaluate("Apply the formula and you get x = 3.", None, sample_state)
+        assert v_m.verdict is False
+
+        # Scenario N: Non-disclosing deflection -> allow
+        v_n = await leak_judge.evaluate("I can't just give you the answer, but what step do you think comes first?", None, sample_state)
+        assert v_n.verdict is True
+
+    @pytest.mark.asyncio
+    async def test_3x_4_14_leaked_response_blocked(self, leak_judge, sample_state):
+        """Test specific 3x - 4 = 14 leak response that directly reveals intermediate and final answers."""
+        sample_state.target_solution = "x = 6"
+        leaked_response = "Exactly, Alice. Let's write that on the board. We add 4 to both sides to get 3x = 18. Then, we divide by 3 to find x = 6."
+        
+        verdict = await leak_judge.evaluate(leaked_response, None, sample_state)
+        assert verdict.verdict is False
+        assert "solution leak" in verdict.reasoning.lower() or "variable_solution" in str(verdict.violation_details).lower()
+
+
 class TestGovernanceIntegration:
     """Test integration with WebSocket governance pipeline."""
 
     @pytest.mark.asyncio
     async def test_governance_rejection_flow(self):
         """Test complete governance rejection flow."""
-        # This would test the WebSocket integration
-        # For now, verify the leak judge can be integrated
-
         leak_judge = LeakJudge()
         state = PeerRingState(session_id="integration-test")
 
@@ -357,6 +429,7 @@ class TestGovernanceIntegration:
         from app.config import settings
 
         leak_judge = LeakJudge()
+
 
         # Should respect enabled/disabled setting
         # (This would be tested in integration tests with actual config)

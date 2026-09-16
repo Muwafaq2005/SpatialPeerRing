@@ -121,26 +121,35 @@ class CandidateScorer:
     def _compute_cooldown_penalty(
         self, agent_id: str, candidate: CandidateAction, state: PeerRingState
     ) -> float:
-        """Calculate combined cooldown penalty from turn history and timestamps."""
+        """Calculate combined cooldown penalty from turn history, speech acts, and timestamps."""
         penalty = candidate.cooldown_penalty
 
-        # Check turn history for consecutive speech (anti-monopolization)
-        recent_agents = [
-            msg.agent_id for msg in reversed(state.messages)
+        # Check turn history for consecutive speech (anti-monopolization) & repetition
+        recent_messages = [
+            msg for msg in reversed(state.messages)
             if msg.role == MessageRole.AGENT and msg.agent_id
         ]
 
-        if recent_agents:
+        if recent_messages:
+            recent_agents = [m.agent_id for m in recent_messages]
+
             # Spoke last 2 turns in a row -> strictly forbidden from speaking a 3rd consecutive time
             if len(recent_agents) >= 2 and recent_agents[0] == agent_id and recent_agents[1] == agent_id:
                 return 1.0
 
             # Spoke last turn -> heavy cooldown penalty
             if recent_agents[0] == agent_id:
-                penalty = max(penalty, 0.45)
+                penalty = max(penalty, 0.55)
+
+            # Prevent repetitive peer interventions if last speaker already provided the same content preview/speech act
+            last_msg = recent_messages[0]
+            last_speech_act = last_msg.metadata.get("speech_act")
+            cand_speech_act = candidate.metadata.get("speech_act")
+            if last_speech_act and cand_speech_act and last_speech_act == cand_speech_act:
+                penalty = max(penalty, 0.40)
 
         # If agent hasn't spoken in last 2 turns, clear any timestamp penalty
-        if recent_agents and len(recent_agents) >= 2 and agent_id not in recent_agents[:2]:
+        if recent_messages and len(recent_messages) >= 2 and agent_id not in [m.agent_id for m in recent_messages[:2]]:
             return 0.0
 
         # Check timestamp-based cooldown from policy state

@@ -370,6 +370,26 @@ async def handle_user_message(session_id: str, connection_id: str, message: dict
                         all_pass = True
                         logger.info(f"✅ PolicyRewriter produced compliant response for session {session_id}")
 
+                # Sync state.messages: replace or remove original unapproved message if rewritten/rejected
+                if state.messages and state.messages[-1].role == MessageRole.AGENT:
+                    if all_pass:
+                        # Update the last dialogue message in state with the final approved response
+                        state.messages[-1] = DialogueMessage(
+                            role=MessageRole.AGENT,
+                            agent_id=turn_result["response"].agent_id,
+                            content=turn_result["response"].content,
+                            think_block=turn_result["response"].think_block,
+                            blackboard_patch=turn_result["response"].blackboard_patch,
+                            timestamp=datetime.utcnow(),
+                            metadata={
+                                **turn_result["response"].metadata,
+                                "orchestration": turn_result["orchestration"]
+                            }
+                        )
+                    else:
+                        # Purge unapproved message from state dialogue history completely
+                        state.messages.pop()
+
                 # If governance still fails after rewriting, send rejection notice
                 if not all_pass:
                     failed_judges = [
