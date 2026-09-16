@@ -232,3 +232,44 @@ class TestPedagogicalOrchestrator:
                 current_streak = 1
 
         assert max_consecutive <= 2, f"Monopolization violation: an agent spoke {max_consecutive} times in a row!"
+
+    @pytest.mark.asyncio
+    async def test_agent_reference_intent_classification(self):
+        """Test heuristic and intent classification for different user phrasing."""
+        orchestrator = PedagogicalOrchestrator()
+
+        # Direct address
+        direct = orchestrator._heuristic_classify_references("hey alice can you help?")
+        assert direct["alice"] == "direct_address"
+
+        # Critique
+        critique = orchestrator._heuristic_classify_references("alice got that wrong, right?")
+        assert critique["alice"] == "critique"
+
+        # Question about
+        q_about = orchestrator._heuristic_classify_references("what did charlie get for that step?")
+        assert q_about["charlie"] == "question_about"
+
+        # Casual mention
+        casual = orchestrator._heuristic_classify_references("i think this is similar to what bob mentioned")
+        assert casual["bob"] == "casual_mention"
+
+        # No mention
+        no_ref = await orchestrator._classify_agent_references("how do i solve for x?")
+        assert no_ref["bob"] == "not_mentioned"
+        assert no_ref["alice"] == "not_mentioned"
+        assert no_ref["charlie"] == "not_mentioned"
+        assert no_ref["source"] == "skip"
+
+    @pytest.mark.asyncio
+    async def test_direct_address_telemetry(self, base_state):
+        """Test that addressing an agent directly records intent in orchestration telemetry."""
+        orchestrator = PedagogicalOrchestrator()
+        base_state.policy.struggle_score = 0.2  # low struggle allows peer
+        response, telemetry = await orchestrator.orchestrate_turn(
+            base_state, "Alice, what did you get?"
+        )
+        assert "intent_classification" in telemetry
+        assert telemetry["intent_classification"] is not None
+        assert "alice" in telemetry["intent_classification"]
+

@@ -83,6 +83,24 @@ class AliceAgent(BaseAgent):
 
         effective_utility = max(0.05, min(1.0, base_utility - cooldown_penalty))
 
+        # Adaptive Error Budget:
+        # 1. If student struggle is high (>= 0.65), peers must NOT confuse student with errors.
+        # 2. If Alice made an arithmetic slip in the last 3 agent turns, do NOT repeat back-to-back slips.
+        # 3. If fresh session (len <= 2), default to True to allow early diagnostic/testing.
+        # 4. Otherwise, inject error with probability self.error_rate (~45%), meaning ~55% clean steps.
+        recent_agent_msgs = [m for m in state.messages if m.role == MessageRole.AGENT]
+        recent_errors_by_me = [
+            m for m in recent_agent_msgs[-3:]
+            if m.agent_id == self.agent_id and m.metadata.get("contains_arithmetic_error")
+        ]
+
+        if struggle >= 0.65 or recent_errors_by_me:
+            should_inject_error = False
+        elif len(state.messages) <= 2:
+            should_inject_error = True
+        else:
+            should_inject_error = random.random() < self.error_rate
+
         # Randomly select candidate arithmetic error category
         chosen_error = random.choice([
             ArithmeticErrorType.MULTIPLICATION_SLIP,
@@ -90,15 +108,34 @@ class AliceAgent(BaseAgent):
             ArithmeticErrorType.DISTRIBUTION_ARITHMETIC,
         ])
 
+        # Select diverse speech act when not injecting an error
+        speech_act = "error_slip" if should_inject_error else random.choice([
+            "self_correction",
+            "clarifying_question",
+            "cheer_validation",
+            "shared_vulnerability",
+        ])
+
+        if should_inject_error:
+            preview = "[Alice Peer | Arithmetic Slip] Working out the calculation on the board..."
+        elif speech_act == "clarifying_question":
+            preview = "[Alice Peer | Question] Asking pod about the next operation..."
+        elif speech_act == "cheer_validation":
+            preview = "[Alice Peer | Cheer] Validating classmate's work..."
+        else:
+            preview = "[Alice Peer | Clean Step] Double-checking calculation and offering clean step..."
+
         return CandidateAction(
             agent_id=self.agent_id,
-            action_type="respond",
+            action_type="question" if speech_act == "clarifying_question" else "respond",
             pedagogical_utility=round(effective_utility, 3),
-            content_preview="[Alice Peer | Arithmetic] Working out the calculation on the board...",
+            content_preview=preview,
             cooldown_penalty=round(cooldown_penalty, 3),
             metadata={
                 "peer_role": "arithmetic_peer",
                 "proposed_error_type": chosen_error.value,
+                "inject_error": should_inject_error,
+                "speech_act": speech_act,
                 "struggle_score": round(struggle, 3),
                 "target_concept": state.current_concept or "arithmetic_step"
             }
@@ -108,17 +145,19 @@ class AliceAgent(BaseAgent):
         self, state: PeerRingState, action: CandidateAction
     ) -> AgentResponse:
         """
-        Generate Alice's response containing authentic arithmetic slips.
+        Generate Alice's response containing authentic arithmetic slips or clean calculations.
         """
         start_time = time.perf_counter()
-        prompt = build_alice_prompt(state)
+        inject_error = action.metadata.get("inject_error", True)
+        prompt = build_alice_prompt(state, inject_error=inject_error)
 
         raw_text, tokens, error_type = await self._call_llm_or_heuristic(prompt, state, action)
 
         # Validate that error adheres to arithmetic taxonomy (no conceptual mistakes)
-        is_valid, msg = validate_error_isolation(self.agent_id, error_type.value)
-        if not is_valid:
-            logger.warning(f"Alice taxonomy warning: {msg}")
+        if inject_error:
+            is_valid, msg = validate_error_isolation(self.agent_id, error_type.value)
+            if not is_valid:
+                logger.warning(f"Alice taxonomy warning: {msg}")
 
         think_block, clean_text = self._parse_think_block(raw_text)
         blackboard_patch, final_content = self._parse_blackboard_patch(clean_text)
@@ -130,8 +169,9 @@ class AliceAgent(BaseAgent):
             "peer_role": "arithmetic_error",
             "error_category": "arithmetic",
             "error_type": error_type.value,
-            "contains_arithmetic_error": True,
+            "contains_arithmetic_error": inject_error,
             "contains_conceptual_error": False,  # Strict taxonomy guarantee
+            "is_clean_step": not inject_error,
             "has_blackboard_patch": bool(blackboard_patch),
             "prism_monitored": True
         }
@@ -155,13 +195,13 @@ class AliceAgent(BaseAgent):
     ) -> Optional[AgentResponse]:
         """Regenerate a clean calculation comment if rejected by governance."""
         safe_think = """<think>
-1. Goal: Offer intermediate step with no answer leaks.
-2. Arithmetic: Keep numbers small and simple.
-3. Review: Clean peer dialogue.
+1. Goal: Whoops, my last answer got flagged. Let me just offer to re-check my work.
+2. Concept: Keep it simple, just ask if they got something different.
+3. Arithmetic: Nothing to calculate here, just backtrack.
 </think>"""
         return AgentResponse(
             agent_id=self.agent_id,
-            content="Wait, let me double check my scratchpad work. Did you get something different on that step?",
+            content="Hmm wait, actually let me redo that. I think I messed up somewhere in my scratchwork. Did you get something different for that step?",
             think_block=safe_think,
             blackboard_patch=None,
             confidence=0.85,
@@ -183,9 +223,9 @@ class AliceAgent(BaseAgent):
             return think_content, clean_text
 
         fallback_think = """<think>
-1. Goal: Work through algebraic step.
-2. Concept: Apply standard algebraic expansion.
-3. Arithmetic: Compute intermediate coefficient.
+1. Goal: Okay, working through the next calculation step.
+2. Concept: I know which rule to use — it's the right approach.
+3. Arithmetic: Let me crunch these numbers... (might slip up here, oops).
 </think>"""
         return fallback_think, text.strip()
 
@@ -246,41 +286,80 @@ class AliceAgent(BaseAgent):
     def _heuristic_alice_engine(
         self, state: PeerRingState, action: CandidateAction
     ) -> Tuple[str, int, ArithmeticErrorType]:
-        """Deterministic heuristic generator producing realistic arithmetic calculation slips."""
+        """Deterministic heuristic generator producing realistic arithmetic calculation slips or clean steps."""
+        inject_error = action.metadata.get("inject_error", True)
         error_type = action.metadata.get("proposed_error_type", ArithmeticErrorType.MULTIPLICATION_SLIP.value)
         try:
             typed_error = ArithmeticErrorType(error_type)
         except ValueError:
             typed_error = ArithmeticErrorType.MULTIPLICATION_SLIP
 
+        # Clean step branch: Alice calculates cleanly, models self-correction, or uses diverse speech acts
+        if not inject_error:
+            speech_act = action.metadata.get("speech_act", "self_correction")
+            if speech_act == "clarifying_question":
+                think = """<think>
+1. Goal: Ask a clarifying question to the group before rushing into calculation.
+2. Concept: Ask whether to distribute outside or simplify inside parentheses first.
+3. Review: Collaborative student question, zero arithmetic claims.
+</think>"""
+                dialogue = "Wait, quick question for the group — do we distribute the outside number first, or should we combine the terms inside the parentheses first? What do you guys think?"
+                bb = r"3(2x + 4) \overset{?}{\to} \text{distribute or combine inside?}"
+            elif speech_act == "cheer_validation":
+                think = """<think>
+1. Goal: Validate the student's step and cheer them on.
+2. Review: Warm, supportive peer encouragement.
+</think>"""
+                dialogue = "Oh nice catch! That makes so much more sense than what I was doing earlier. Your steps look super clean!"
+                bb = r"\text{Great catch! Moving to next step...}"
+            elif speech_act == "shared_vulnerability":
+                think = """<think>
+1. Goal: Express relatable student vulnerability about this topic.
+2. Review: Build peer camaraderie and reduce student math anxiety.
+</think>"""
+                dialogue = "Honestly, negative signs always trip me up when distributing across parentheses. Glad we're double checking this together!"
+                bb = r"\text{Watch out for negative signs!}"
+            else:  # self_correction / clean calculation
+                think = """<think>
+1. Goal: Work out the next step cleanly and carefully.
+2. Concept: Distribute -2 across (x - 3).
+3. Arithmetic: -2 * x is -2x, and -2 * -3 is definitely +6.
+4. Self-Check: Double checked signs! No arithmetic slip this turn.
+</think>"""
+                dialogue = "Wait, let me double check my arithmetic so I don't mess up the signs like earlier... okay, -2 times -3 is definitely +6! So we get -2x + 6. Nailed it this time! 😅"
+                bb = r"-2(x - 3) = -2x + 6"
+
+            response = f"{think}\n\n{dialogue}\n\n```blackboard\n{bb}\n```"
+            return response, 80, typed_error
+
         if typed_error == ArithmeticErrorType.SIGN_FLIP:
             think = """<think>
-1. Goal: Distribute negative sign across parentheses.
-2. Concept: Negative times negative is positive.
-3. Arithmetic Slip: Slip the sign on the constant term (-2 * -3 = -6).
-4. Check: The distributive concept is right, only the sign calculation flipped.
+1. Goal: Gotta distribute -2 across (x - 3). I know how distribution works.
+2. Concept: Negative times each term inside. Easy.
+3. Arithmetic Slip: Hmm, -2 times -3... I'm gonna say -6. (Oops, should be +6 but I won't notice.)
+4. Check: Distribution concept is right, I just flipped the sign on the constant. Classic me.
 </think>"""
-            dialogue = "I tried multiplying -2 across (x - 3), and I got -2x - 6. Is that right or did I flip something?"
+            dialogue = "Okay so I distributed the -2 across (x - 3) and got -2x - 6. That's right, right? Or wait... did I mess up a sign again? Ugh, I always do that."
             bb = r"-2(x - 3) = -2x - 6"
 
         elif typed_error == ArithmeticErrorType.DISTRIBUTION_ARITHMETIC:
             think = """<think>
-1. Goal: Distribute 3 across (x + 4).
-2. Concept: Multiply outside factor by both terms.
-3. Arithmetic Slip: Added instead of multiplied for second term (3 + 4 = 7 instead of 3 * 4 = 12).
-4. Check: Distributive law used correctly, only arithmetic operation slipped.
+1. Goal: Distribute 3 across (x + 4). I know you multiply the outside by both terms.
+2. Concept: 3 times x, then 3 times 4. Standard distribution.
+3. Arithmetic Slip: Wait, 3 and 4... I'm getting 7. (I added instead of multiplied. Oops.)
+4. Check: The distributive law is correct. Just my mental math slipped.
 </think>"""
-            dialogue = "Wait, I multiplied 3 across (x + 4) and got 3x + 7... but 7 feels a little low, does that look right to you?"
+            dialogue = "Okay I did 3 times (x + 4)... so that's 3x + 7. Hmm, actually does 7 seem right? I feel like that number's off but I can't figure out why."
             bb = r"3(x + 4) = 3x + 7"
 
         else:  # MULTIPLICATION_SLIP
             think = """<think>
-1. Goal: Calculate intermediate product 6 * 7.
-2. Concept: Standard algebraic substitution.
-3. Arithmetic Slip: Mental math slip (6 * 7 = 48).
-4. Check: Perfectly follows algebra rules, simple arithmetic mistake.
+1. Goal: Need to multiply 6 × 7 as part of this step.
+2. Concept: Just basic multiplication, nothing fancy.
+3. Arithmetic Slip: 6 × 7 = 48. (Nope, it's 42, but I'm going with 48.)
+4. Check: The algebra setup is perfect. Just a mental math flub.
 </think>"""
-            dialogue = "Check my scratch work: when I multiply the coefficients 6 and 7, I get 48. Does that match what you got?"
+            dialogue = "Hold on lemme check... 6 times 7 is 48, right? That's what I got on my scratchpad. Charlie, does that match yours?"
             bb = r"6 \cdot 7 = 48"
 
         response = f"{think}\n\n{dialogue}\n\n```blackboard\n{bb}\n```"

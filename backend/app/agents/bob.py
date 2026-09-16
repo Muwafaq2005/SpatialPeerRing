@@ -182,15 +182,15 @@ class BobAgent(BaseAgent):
         )
 
         safe_think = f"""<think>
-1. Understand: Previous response flagged by governance for [{rejection_reason}].
-2. Plan: Fall back to a purely reflective, non-leaking conceptual prompt.
-3. Execute: Ask student to articulate the goal in their own words.
-4. Review: Zero mathematical terms or answers present in output. Pass guaranteed.
+1. Understand: My previous response got flagged for [{rejection_reason}]. Need to back way up.
+2. Plan: Ask something purely reflective — no numbers, no formulas, just big picture.
+3. Execute: Get the student to describe the problem in their own words.
+4. Review: Nothing mathematical in my response. Clean.
 </think>"""
 
         safe_content = (
-            "Let's take a step back and examine the big picture. "
-            "Before we calculate anything, what is the core relationship or pattern you notice here?"
+            "Hey, let's zoom out for a second. Before we crunch any numbers, "
+            "can you tell me in your own words — what's this problem actually asking us to figure out?"
         )
 
         return AgentResponse(
@@ -231,10 +231,10 @@ class BobAgent(BaseAgent):
 
         # If no think block generated, construct a structured fallback Pólya block
         fallback_think = """<think>
-1. Understand: Student is exploring the current concept step.
-2. Plan: Provide targeted Socratic inquiry.
-3. Execute: Ask a guiding question to prompt self-reflection.
-4. Review: Confirmed no direct answer or formula leak.
+1. Understand: Student is working through the current step. Let me figure out where they are.
+2. Plan: Ask a question that makes them think about what they just did, not what comes next.
+3. Execute: Keep it conversational — like I'd actually say this out loud.
+4. Review: No answer leak, no formula giveaway. Clean.
 </think>"""
         return fallback_think, text.strip()
 
@@ -316,59 +316,86 @@ class BobAgent(BaseAgent):
         last_user = self._get_latest_user_message(state)
         user_content = last_user.content if last_user else "I'm not sure how to solve this."
 
+        # Check if the student mentioned any agent by name
+        user_lower = user_content.lower()
+        mentions_alice = any(w in user_lower for w in ["alice", "alice's", "alice,"])
+        mentions_charlie = any(w in user_lower for w in ["charlie", "charlie's", "charlie,"])
+        mentions_bob = any(w in user_lower for w in ["bob", "bob,", "hey bob"])
+
         # Deliberation steps
         polya_deliberation = f"""<think>
 1. Understand the Problem:
-   - Student stated: "{user_content}"
-   - Active curriculum node: {active_concept} (Struggle score: {struggle:.2f})
-   - The student has not yet consolidated the fundamental relationship.
+   - Student said: "{user_content}"
+   - They're working on: {active_concept} (struggle: {struggle:.2f})
+   - Agent mentions: {'Alice referenced' if mentions_alice else 'no Alice ref'}, {'Charlie referenced' if mentions_charlie else 'no Charlie ref'}, {'talking to me directly' if mentions_bob else 'not addressing me by name'}
+   - I need to figure out if they're stuck, making progress, or just checking in.
 2. Devise a Plan:
-   - Assistance Ladder Level {level}/6 active.
-   - Strategy: Use Socratic probing to guide student attention to key invariances.
-   - Guardrail constraint: Zero solution disclosure.
+   - Assistance Level {level}/6 — {'light touch, let them explore' if level <= 2 else 'they need more scaffolding' if level <= 4 else 'okay, time for more direct support'}.
+   - {'Student mentioned Alice — I should acknowledge her work.' if mentions_alice else ''}
+   - {'Student mentioned Charlie — I should engage with his idea.' if mentions_charlie else ''}
+   - Zero answer disclosure. Always.
 3. Execute the Plan:
-   - Formulate diagnostic inquiry that requires student to state the next step.
+   - Ask something that makes them THINK, not just calculate.
 4. Review & Governance Self-Check:
-   - Leak check: Verified. No numerical solutions or direct formula reductions provided.
-   - Tone: Encouraging, concise, and focused on student agency.
+   - Am I giving away the answer? No.
+   - Does this sound like something I'd actually say in a real tutoring session? Yes.
 </think>"""
 
-        # Map response templates based on Assistance Level
-        if level == 1:
+        # Build natural dialogue based on context and Assistance Level
+        if mentions_alice and level <= 3:
             visible_dialogue = (
-                "That's a thoughtful question. What do you think is the very first piece of information "
-                "we should extract from the problem statement?"
+                "Good eye looking at Alice's work! Before we move on, "
+                "what specifically caught your attention about her approach? "
+                "Was it the setup or the calculation part?"
+            )
+            bb_patch = None
+        elif mentions_charlie and level <= 3:
+            visible_dialogue = (
+                "Yeah, Charlie's idea is interesting, right? It sounds like it should work. "
+                "But here's a good habit — can you test it with a simple example to see if the shortcut actually holds up?"
+            )
+            bb_patch = None
+        elif mentions_bob:
+            visible_dialogue = (
+                "Yeah, I'm right here! So tell me — what part of this is giving you the most trouble? "
+                "Is it the setup, or is it once you start solving that things get fuzzy?"
+            )
+            bb_patch = None
+        elif level == 1:
+            visible_dialogue = (
+                "Okay, I like where your head's at. Before we dive into any math, "
+                "what's the very first thing this problem is asking us to find?"
             )
             bb_patch = None
         elif level == 2:
             visible_dialogue = (
-                "Take a close look at how the quantities change from the initial state to the next. "
-                "Do you notice any pattern or value that remains constant?"
+                "Take another look at the numbers here. Do you notice anything that stays the same, "
+                "or any pattern in how things change from one step to the next?"
             )
             bb_patch = None
         elif level == 3:
             visible_dialogue = (
-                "Notice how the terms are grouped together. If we want to isolate our unknown term, "
-                "what operation could we apply to both sides to simplify the expression?"
+                "Okay so we've got these terms grouped together. If we want to get our unknown by itself, "
+                "what could we do to both sides to start simplifying things?"
             )
             bb_patch = r"\text{Focus: } a \cdot (b + c) = \text{?}"
         elif level == 4:
             visible_dialogue = (
-                "Let's look at a simpler parallel situation. If we had 2(x + 3), we would distribute 2 to both x and 3, "
-                "giving 2x + 6. How would you apply that same distribution structure to our problem?"
+                "Let me show you something similar but simpler. If we had 2(x + 3), we'd distribute the 2 to both "
+                "terms inside — so 2x + 6. See that structure? Now, how would you apply that same idea to our problem?"
             )
             bb_patch = r"2 \cdot (x + 3) = 2x + 6"
         elif level == 5:
             visible_dialogue = (
-                "Let's break this into two small steps. First, look at the left-hand side: "
-                "if you expand just the parentheses, what terms do you get before we do anything else?"
+                "Alright, let's take this one tiny step at a time. Just focus on the left side for now — "
+                "if you expand what's in the parentheses, what terms do you get? Don't worry about the rest yet."
             )
             bb_patch = r"\text{Step 1: Expand } (\dots) \implies \text{?}"
         else:  # Level 6
             visible_dialogue = (
-                "Remember the fundamental definition: when distributing a factor across a sum, "
-                "every term inside the brackets must be multiplied by that factor. "
-                "Try writing out just that multiplication step on the blackboard."
+                "Okay, here's the key idea: when you distribute a number across a sum, you have to multiply it by "
+                "every single term inside the brackets. Not just the first one — all of them. "
+                "Try writing out just that multiplication step on the board."
             )
             bb_patch = r"k \cdot (A + B) = kA + kB"
 

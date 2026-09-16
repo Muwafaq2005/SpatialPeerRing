@@ -233,3 +233,52 @@ class TestPeerResponseGeneration:
 
         assert rec_c is not None
         assert rec_c.metadata.get("regenerated_after_rejection") is True
+
+
+class TestAdaptiveErrorBudget:
+    """Validate dynamic error budget and clean step / slip mixing."""
+
+    @pytest.mark.asyncio
+    async def test_high_struggle_suppresses_alice_and_charlie_errors(self, base_state):
+        """When student struggle is high, peers must NOT inject errors."""
+        base_state.policy.struggle_score = 0.85
+        alice = AliceAgent()
+        charlie = CharlieAgent()
+
+        act_a = await alice.propose_candidate_action(base_state)
+        act_c = await charlie.propose_candidate_action(base_state)
+
+        assert act_a.metadata["inject_error"] is False
+        assert act_c.metadata["inject_error"] is False
+
+        resp_a = await alice.generate_response(base_state, act_a)
+        resp_c = await charlie.generate_response(base_state, act_c)
+
+        assert resp_a.metadata["contains_arithmetic_error"] is False
+        assert resp_a.metadata["is_clean_step"] is True
+        assert resp_c.metadata["contains_conceptual_error"] is False
+        assert resp_c.metadata["is_clean_step"] is True
+
+    @pytest.mark.asyncio
+    async def test_recent_error_prevents_consecutive_peer_errors(self, base_state):
+        """If Alice made an error recently, she should provide a clean step next time."""
+        base_state.policy.struggle_score = 0.2
+        alice = AliceAgent()
+
+        # Simulate Alice having made an arithmetic error on previous turn
+        base_state.messages.append(
+            DialogueMessage(
+                role=MessageRole.AGENT,
+                agent_id="alice-peer",
+                content="Wait, I got 7.",
+                metadata={"contains_arithmetic_error": True}
+            )
+        )
+
+        act = await alice.propose_candidate_action(base_state)
+        assert act.metadata["inject_error"] is False
+
+        resp = await alice.generate_response(base_state, act)
+        assert resp.metadata["contains_arithmetic_error"] is False
+        assert resp.metadata["is_clean_step"] is True
+
